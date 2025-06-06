@@ -75,9 +75,11 @@ const Index = () => {
                 Browse Career Paths
               </Button>
             </Link>
-            <Button variant="ghost" size="lg" className="text-lg px-8 py-3">
-              Create a Resume
-            </Button>
+            <Link to="/create-resume">
+              <Button variant="ghost" size="lg" className="text-lg px-8 py-3">
+                Create a Resume
+              </Button>
+            </Link>
           </div>
 
           {/* Quick Stats */}

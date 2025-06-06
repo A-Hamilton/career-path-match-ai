@@ -10,6 +10,10 @@ import CareerPaths from "./pages/CareerPaths";
 import JobSearch from "./pages/JobSearch";
 import SignIn from "./pages/SignIn";
 import SignUp from "./pages/SignUp";
+import ForgotPassword from "./pages/ForgotPassword";
+import UserProfile from "./pages/UserProfile";
+import Settings from "./pages/Settings";
+import CreateResume from "./pages/CreateResume";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -27,6 +31,10 @@ const App = () => (
           <Route path="/job-search" element={<JobSearch />} />
           <Route path="/signin" element={<SignIn />} />
           <Route path="/signup" element={<SignUp />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/profile" element={<UserProfile />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="/create-resume" element={<CreateResume />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
