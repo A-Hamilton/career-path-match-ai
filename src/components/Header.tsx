@@ -49,12 +49,16 @@ const Header = () => {
 
           {/* User Account Area */}
           <div className="flex items-center space-x-4">
-            <Button variant="outline" size="sm" className="hidden sm:inline-flex">
-              Sign In
-            </Button>
-            <Button size="sm" className="bg-blue-600 hover:bg-blue-700">
-              Sign Up
-            </Button>
+            <Link to="/signin">
+              <Button variant="outline" size="sm" className="hidden sm:inline-flex">
+                Sign In
+              </Button>
+            </Link>
+            <Link to="/signup">
+              <Button size="sm" className="bg-blue-600 hover:bg-blue-700">
+                Sign Up
+              </Button>
+            </Link>
             <Avatar className="h-8 w-8 cursor-pointer">
               <AvatarFallback className="bg-blue-100 text-blue-600">
                 <User className="h-4 w-4" />

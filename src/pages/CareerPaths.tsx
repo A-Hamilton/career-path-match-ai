@@ -12,8 +12,8 @@ import { Link } from "react-router-dom";
 
 const CareerPaths = () => {
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedIndustry, setSelectedIndustry] = useState("");
-  const [selectedLevel, setSelectedLevel] = useState("");
+  const [selectedIndustry, setSelectedIndustry] = useState("all");
+  const [selectedLevel, setSelectedLevel] = useState("all");
 
   const careerPaths = [
     {
@@ -93,7 +93,7 @@ const CareerPaths = () => {
   const filteredPaths = careerPaths.filter(path => {
     const matchesSearch = path.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          path.description.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesIndustry = !selectedIndustry || path.industry === selectedIndustry;
+    const matchesIndustry = selectedIndustry === "all" || path.industry === selectedIndustry;
     return matchesSearch && matchesIndustry;
   });
 
@@ -128,7 +128,7 @@ const CareerPaths = () => {
                     <SelectValue placeholder="All Industries" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">All Industries</SelectItem>
+                    <SelectItem value="all">All Industries</SelectItem>
                     <SelectItem value="Technology">Technology</SelectItem>
                     <SelectItem value="Design">Design</SelectItem>
                     <SelectItem value="Marketing">Marketing</SelectItem>
@@ -140,7 +140,7 @@ const CareerPaths = () => {
                     <SelectValue placeholder="Experience Level" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">All Levels</SelectItem>
+                    <SelectItem value="all">All Levels</SelectItem>
                     <SelectItem value="entry">Entry Level</SelectItem>
                     <SelectItem value="mid">Mid Level</SelectItem>
                     <SelectItem value="senior">Senior Level</SelectItem>
@@ -207,11 +207,9 @@ const CareerPaths = () => {
                   </div>
 
                   <div className="flex space-x-2 pt-4">
-                    <Link to={`/career-paths/${path.id}`} className="flex-1">
-                      <Button className="w-full bg-blue-600 hover:bg-blue-700">
-                        Learn More
-                      </Button>
-                    </Link>
+                    <Button className="flex-1 bg-blue-600 hover:bg-blue-700">
+                      Learn More
+                    </Button>
                     <Button variant="outline" size="icon">
                       <Star className="h-4 w-4" />
                     </Button>
@@ -229,8 +227,8 @@ const CareerPaths = () => {
                 className="mt-4"
                 onClick={() => {
                   setSearchTerm("");
-                  setSelectedIndustry("");
-                  setSelectedLevel("");
+                  setSelectedIndustry("all");
+                  setSelectedLevel("all");
                 }}
               >
                 Clear Filters
