@@ -1,12 +1,13 @@
-
 import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { FileText, TrendingUp, Search, User } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 
 const Header = () => {
   const location = useLocation();
   const currentPath = location.pathname;
+  const { user, loading, signOut } = useAuth();
 
   const navigation = [
     { name: "Home", href: "/", icon: null },
@@ -49,21 +50,33 @@ const Header = () => {
 
           {/* User Account Area */}
           <div className="flex items-center space-x-4">
-            <Link to="/signin">
-              <Button variant="outline" size="sm" className="hidden sm:inline-flex">
-                Sign In
-              </Button>
-            </Link>
-            <Link to="/signup">
-              <Button size="sm" className="bg-blue-600 hover:bg-blue-700">
-                Sign Up
-              </Button>
-            </Link>
-            <Avatar className="h-8 w-8 cursor-pointer">
-              <AvatarFallback className="bg-blue-100 text-blue-600">
-                <User className="h-4 w-4" />
-              </AvatarFallback>
-            </Avatar>
+            {loading ? null : user ? (
+              <>
+                <Link to="/profile" className="hidden sm:inline-flex">
+                  <Avatar className="h-8 w-8 cursor-pointer">
+                    <AvatarFallback className="bg-blue-100 text-blue-600">
+                      <User className="h-4 w-4" />
+                    </AvatarFallback>
+                  </Avatar>
+                </Link>
+                <Button variant="outline" size="sm" onClick={signOut}>
+                  Sign Out
+                </Button>
+              </>
+            ) : (
+              <>
+                <Link to="/signin">
+                  <Button variant="outline" size="sm" className="hidden sm:inline-flex">
+                    Sign In
+                  </Button>
+                </Link>
+                <Link to="/signup">
+                  <Button size="sm" className="bg-blue-600 hover:bg-blue-700">
+                    Sign Up
+                  </Button>
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </div>

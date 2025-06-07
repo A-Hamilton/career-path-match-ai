@@ -1,5 +1,4 @@
-
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,15 +10,29 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import { User, FileText, Briefcase, GraduationCap, Star, Bookmark, Clock } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 
 const UserProfile = () => {
+  const { user, loading } = useAuth();
   const [personalInfo, setPersonalInfo] = useState({
-    name: "John Doe",
-    email: "john.doe@example.com",
-    phone: "+1 (555) 123-4567",
-    location: "San Francisco, CA",
-    bio: "Experienced software engineer with a passion for building scalable applications."
+    name: user?.displayName || '',
+    email: user?.email || '',
+    phone: '',
+    location: '',
+    bio: ''
   });
+  useEffect(() => {
+    if (!loading) {
+      setPersonalInfo(info => ({
+        ...info,
+        name: user?.displayName || '',
+        email: user?.email || ''
+      }));
+    }
+  }, [user, loading]);
+  if (loading) {
+    return <div>Loading profile...</div>;
+  }
 
   const [skills] = useState([
     "JavaScript", "React", "Node.js", "Python", "AWS", "Docker", "MongoDB"

@@ -36,7 +36,7 @@ const App = () => (
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Index />} />
-            <Route path="/resume-analyzer" element={<ResumeAnalyzer />} />
+            <Route path="/resume-analyzer" element={<ProtectedRoute><ResumeAnalyzer /></ProtectedRoute>} />
             <Route path="/career-paths" element={<CareerPaths />} />
             <Route path="/job-search" element={<JobSearch />} />
             <Route path="/signin" element={<SignIn />} />

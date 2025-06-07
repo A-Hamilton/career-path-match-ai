@@ -1,4 +1,3 @@
-
 import { useState } from "react";
 import { Upload, FileText, CheckCircle, AlertCircle, TrendingUp, Download, Eye, Target, Briefcase, MapPin, DollarSign, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -11,10 +10,12 @@ import { Label } from "@/components/ui/label";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import { useToast } from "@/hooks/use-toast";
+import { firebaseAuth } from "@/lib/firebase"; // add at top
 
 const ResumeAnalyzer = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisComplete, setAnalysisComplete] = useState(false);
+  const [analysisData, setAnalysisData] = useState<any>(null);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [targetJobTitle, setTargetJobTitle] = useState("");
   const { toast } = useToast();
@@ -30,19 +31,29 @@ const ResumeAnalyzer = () => {
     }
   };
 
-  const analyzeResume = () => {
+  const analyzeResume = async () => {
     if (!uploadedFile) return;
-    
     setIsAnalyzing(true);
-    // Simulate analysis process
-    setTimeout(() => {
-      setIsAnalyzing(false);
-      setAnalysisComplete(true);
-      toast({
-        title: "Analysis complete!",
-        description: "Your resume has been successfully analyzed.",
+    const formData = new FormData();
+    formData.append('resume', uploadedFile);
+    if (targetJobTitle) formData.append('targetJobTitle', targetJobTitle);
+    try {
+      const token = await firebaseAuth.currentUser?.getIdToken();
+      const res = await fetch('/upload', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
       });
-    }, 3000);
+      if (!res.ok) throw new Error('Upload failed');
+      const data = await res.json();
+      setAnalysisData(data);
+      setAnalysisComplete(true);
+      toast({ title: 'Analysis complete!', description: 'Your resume has been successfully uploaded.' });
+    } catch (error: any) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   const getScoreColor = (score: number) => {
@@ -133,7 +144,22 @@ const ResumeAnalyzer = () => {
   return (
     <div className="min-h-screen bg-background">
       <Header />
-      
+      {analysisComplete && analysisData && (
+        <Card className="mb-8">
+          <CardHeader>
+            <CardTitle>Upload Response</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <pre className="text-sm bg-gray-100 p-4 rounded">
+              {JSON.stringify(analysisData, null, 2)}
+            </pre>
+            <Button variant="outline" onClick={() => { setAnalysisComplete(false); setAnalysisData(null); setUploadedFile(null); }}>
+              Analyze Another
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="container mx-auto px-4 py-12">
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-12">
