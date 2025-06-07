@@ -11,9 +11,15 @@ import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import { User, FileText, Briefcase, GraduationCap, Star, Bookmark, Clock } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { firebaseDb } from "@/lib/firebase";
+import { doc, getDoc, setDoc } from "firebase/firestore";
+import { useToast } from '@/hooks/use-toast';
 
 const UserProfile = () => {
   const { user, loading } = useAuth();
+  const { toast } = useToast();
+  const [isSaving, setIsSaving] = useState(false);
+
   const [personalInfo, setPersonalInfo] = useState({
     name: user?.displayName || '',
     email: user?.email || '',
@@ -22,14 +28,19 @@ const UserProfile = () => {
     bio: ''
   });
   useEffect(() => {
-    if (!loading) {
-      setPersonalInfo(info => ({
-        ...info,
-        name: user?.displayName || '',
-        email: user?.email || ''
-      }));
+    if (!loading && user) {
+      setPersonalInfo(info => ({ ...info, name: user.displayName || '', email: user.email || '' }));
+      // Load saved data from Firestore
+      (async () => {
+        const ref = doc(firebaseDb, 'users', user.uid);
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          setPersonalInfo(prev => ({ ...prev, ...snap.data() }));
+        }
+      })();
     }
   }, [user, loading]);
+
   if (loading) {
     return <div>Loading profile...</div>;
   }
@@ -108,7 +119,7 @@ const UserProfile = () => {
                     </div>
                     <div>
                       <Label htmlFor="email">Email</Label>
-                      <Input id="email" type="email" value={personalInfo.email} onChange={(e) => setPersonalInfo({...personalInfo, email: e.target.value})} />
+                      <Input id="email" type="email" value={personalInfo.email} readOnly className="bg-gray-100 cursor-not-allowed" />
                     </div>
                     <div>
                       <Label htmlFor="phone">Phone</Label>
@@ -131,7 +142,23 @@ const UserProfile = () => {
                       ))}
                     </div>
                   </div>
-                  <Button>Save Changes</Button>
+                  <Button disabled={isSaving} onClick={async () => {
+                      setIsSaving(true);
+                      if (user) {
+                        const ref = doc(firebaseDb, 'users', user.uid);
+                        await setDoc(ref, {
+                          name: personalInfo.name,
+                          email: personalInfo.email,
+                          phone: personalInfo.phone,
+                          location: personalInfo.location,
+                          bio: personalInfo.bio
+                        }, { merge: true });
+                        toast({ title: 'Profile Saved', description: 'Your changes have been stored.' });
+                      }
+                      setIsSaving(false);
+                    }}>
+                    {isSaving ? 'Saving...' : 'Save Changes'}
+                  </Button>
                 </CardContent>
               </Card>
             </TabsContent>
