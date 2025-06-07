@@ -1,4 +1,3 @@
-
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -160,8 +159,8 @@ const Help = () => {
               <CardDescription>
                 Can't find what you're looking for? Our support team is here to help.
               </CardDescription>
-            </CardContent>
-            <CardContent>
+            </CardHeader>
+             <CardContent>
               <div className="space-y-3">
                 <div className="text-sm text-gray-600">
                   <strong>Email:</strong> support@resumematch.ai

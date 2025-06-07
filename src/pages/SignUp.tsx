@@ -1,5 +1,7 @@
-
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { createUserWithEmailAndPassword } from "firebase/auth";
+import { firebaseAuth } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -20,6 +22,7 @@ const SignUp = () => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   const passwordCriteria = [
     { label: "At least 8 characters", test: (pwd: string) => pwd.length >= 8 },
@@ -46,17 +49,23 @@ const SignUp = () => {
       });
       return;
     }
-
     setIsLoading(true);
-    
-    // Simulate registration
-    setTimeout(() => {
+    try {
+      const userCredential = await createUserWithEmailAndPassword(
+        firebaseAuth,
+        formData.email,
+        formData.password
+      );
       setIsLoading(false);
       toast({
         title: "Welcome to ResumeMatch AI!",
-        description: "Your account has been created successfully.",
+        description: `Account created for ${userCredential.user.email}`,
       });
-    }, 1500);
+      navigate('/profile');
+    } catch (error: any) {
+      setIsLoading(false);
+      toast({ title: "Sign-up Error", description: error.message, variant: 'destructive' });
+    }
   };
 
   return (

@@ -1,12 +1,13 @@
-
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Eye, EyeOff, FileText } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
+import { signInWithEmailAndPassword } from "firebase/auth";
+import { firebaseAuth } from "@/lib/firebase";
 
 const SignIn = () => {
   const [email, setEmail] = useState("");
@@ -14,19 +15,21 @@ const SignIn = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     
-    // Simulate authentication
-    setTimeout(() => {
+    try {
+      const userCredential = await signInWithEmailAndPassword(firebaseAuth, email, password);
       setIsLoading(false);
-      toast({
-        title: "Welcome back!",
-        description: "You have successfully signed in.",
-      });
-    }, 1500);
+      toast({ title: "Welcome back!", description: `Signed in as ${userCredential.user.email}` });
+      navigate('/profile');
+    } catch (error: any) {
+      setIsLoading(false);
+      toast({ title: "Sign-in Error", description: error.message, variant: 'destructive' });
+    }
   };
 
   return (
