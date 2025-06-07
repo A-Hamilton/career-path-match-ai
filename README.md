@@ -1,73 +1,86 @@
-# Welcome to your Lovable project
+# Career Path Match AI
 
-## Project info
+A modern web application that empowers users to optimize their resumes, explore personalized career paths, and discover job opportunities using AI-powered tools.
 
-**URL**: https://lovable.dev/projects/e240ca43-132d-4b36-86b9-5a78a95e3cdf
+## Tech Stack
 
-## How can I edit this code?
+- **Frontend:** React, TypeScript, Vite, Tailwind CSS, shadcn-ui, React Query, React Router, Sonner
+- **Backend:** Node.js, Express, TypeScript, Multer, Firebase Admin (Auth)
+- **Authentication:** Firebase Authentication (Email/Password, Google Sign-In)
+- **AI Integration:** Placeholder for resume analysis engine (e.g., OpenAI, Vertex AI)
+- **Storage & Database:** Local file uploads & future database integration (e.g., Firestore, PostgreSQL)
 
-There are several ways of editing your application.
+## Getting Started
 
-**Use Lovable**
+### Prerequisites
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/e240ca43-132d-4b36-86b9-5a78a95e3cdf) and start prompting.
+- Node.js (>=16)
+- npm or yarn
+- Firebase project with Auth enabled and service account JSON
 
-Changes made via Lovable will be committed automatically to this repo.
+### Installation
 
-**Use your preferred IDE**
+1. Clone the repository:
+   ```sh
+   git clone <YOUR_GIT_URL>
+   cd career-path-match-ai
+   ```
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+2. Install dependencies:
+   ```sh
+   npm install
+   npm install --prefix server
+   ```
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+3. Create `.env.local` in the project root with your Firebase web config:
+   ```env
+   VITE_FIREBASE_API_KEY=YOUR_API_KEY
+   VITE_FIREBASE_AUTH_DOMAIN=YOUR_AUTH_DOMAIN
+   VITE_FIREBASE_PROJECT_ID=YOUR_PROJECT_ID
+   VITE_FIREBASE_STORAGE_BUCKET=YOUR_STORAGE_BUCKET
+   VITE_FIREBASE_MESSAGING_SENDER_ID=YOUR_MESSAGING_SENDER_ID
+   VITE_FIREBASE_APP_ID=YOUR_APP_ID
+   VITE_FIREBASE_MEASUREMENT_ID=YOUR_MEASUREMENT_ID
+   ```
 
-Follow these steps:
+4. Set up Firebase Admin credentials in your shell:
+   ```sh
+   export GOOGLE_APPLICATION_CREDENTIALS="/path/to/serviceAccountKey.json"
+   ```
 
+### Development
+
+Run both frontend and backend concurrently:
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
 npm run dev
 ```
+- Frontend: http://localhost:8080 (or next available port)
+- Backend API: http://localhost:4000
 
-**Edit a file directly in GitHub**
+### Available Scripts
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+- `dev`        Run both client and server concurrently
+- `dev:client` Start the Vite dev server
+- `dev:server` Start the Express backend (`ts-node-dev`)
+- `build`      Build the frontend for production
+- `preview`    Preview the production build
 
-**Use GitHub Codespaces**
+## Usage
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+1. Sign up or sign in (Email/Password or Google)
+2. Navigate to **Resume Analyzer** to upload a resume
+3. View your AI-powered analysis and download results
+4. Explore **Career Paths** and **Job Search** modules
 
-## What technologies are used for this project?
+## Deployment
 
-This project is built with:
+- **Frontend:** Deploy the `dist` folder to Netlify, Vercel, or any static host
+- **Backend:** Deploy the `server/src/index.ts` via Heroku, AWS, or Vercel Functions
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+## Contributing
 
-## How can I deploy this project?
+Contributions, issues, and feature requests are welcome. Please submit a pull request or open an issue to discuss changes.
 
-Simply open [Lovable](https://lovable.dev/projects/e240ca43-132d-4b36-86b9-5a78a95e3cdf) and click on Share -> Publish.
+## License
 
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
+This project is licensed under the MIT License.
