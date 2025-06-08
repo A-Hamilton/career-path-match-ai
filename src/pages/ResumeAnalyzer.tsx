@@ -277,7 +277,10 @@ const ResumeAnalyzer = () => {
                 {/* Keywords */}
                 <Card>
                   <CardHeader>
-                    <CardTitle>Keyword Optimization</CardTitle>
+                    <CardTitle className="flex items-center text-blue-600">
+                      <BookOpen className="h-5 w-5 mr-2" />
+                      Keywords
+                    </CardTitle>
                   </CardHeader>
                   <CardContent>
                     <div className="grid md:grid-cols-2 gap-6 mb-6">
@@ -308,21 +311,6 @@ const ResumeAnalyzer = () => {
                             <p className="text-gray-500 text-sm">No keyword suggestions available.</p>
                           )}
                         </div>
-                      </div>
-                    </div>
-                    <div>
-                      <h4 className="font-semibold text-blue-600 mb-3">Keyword Placement Suggestions</h4>
-                      <div className="space-y-2">
-                        {analysisData.keywords?.placement && Array.isArray(analysisData.keywords.placement) ? (
-                          analysisData.keywords.placement.map((item: any, index: number) => (
-                            <div key={index} className="flex items-center justify-between p-3 bg-blue-50 rounded-lg">
-                              <span className="font-medium">{item.keyword}</span>
-                              <span className="text-sm text-gray-600">{item.suggestion}</span>
-                            </div>
-                          ))
-                        ) : (
-                          <p className="text-gray-500 text-sm">No placement suggestions available.</p>
-                        )}
                       </div>
                     </div>
                   </CardContent>
@@ -417,7 +405,12 @@ const ResumeAnalyzer = () => {
                           <div key={index} className="border rounded-lg p-4">
                             <h4 className="font-semibold text-gray-900">{project.name}</h4>
                             <p className="text-sm text-gray-600">{project.description}</p>
-                            <p className="text-sm text-gray-500">Technologies: {project.technologies.join(', ')}</p>
+                            <p className="text-sm text-gray-500">
+                              Technologies:{" "}
+                              {Array.isArray(project.technologies)
+                                ? project.technologies.join(", ")
+                                : project.technologies || "N/A"}
+                            </p>
                             {project.link && (
                               <a href={project.link} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
                                 View Project

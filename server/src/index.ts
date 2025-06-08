@@ -84,8 +84,16 @@ app.post('/upload', verifyToken, upload.single('resume'), async (req: Request, r
     // Check if the uploaded file is a PDF
     if (req.file.mimetype === 'application/pdf') {
       const fileBuffer = await fs.readFile(filePath);
-      const pdfData = await pdf(fileBuffer);
-      fileContent = pdfData.text;
+      try {
+        const pdfData = await pdf(fileBuffer);
+        fileContent = pdfData.text;
+      } catch (pdfError) {
+        console.error('PDF Parsing Error:', pdfError.message);
+        return res.status(400).json({
+          error: 'Failed to parse PDF file',
+          details: pdfError.message,
+        });
+      }
     } else {
       // For non-PDF files, read as text
       fileContent = await fs.readFile(filePath, 'utf-8');
