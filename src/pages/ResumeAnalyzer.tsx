@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Upload, FileText, CheckCircle, AlertCircle, TrendingUp, Download, Eye, Target, Briefcase, MapPin, DollarSign, Clock } from "lucide-react";
+import { Upload, FileText, CheckCircle, AlertCircle, TrendingUp, Download, Eye, Target, Briefcase, MapPin, DollarSign, Clock, BookOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -11,6 +11,7 @@ import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import { useToast } from "@/hooks/use-toast";
 import { firebaseAuth } from "@/lib/firebase"; // add at top
+import axios from 'axios';
 
 const ResumeAnalyzer = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -18,6 +19,7 @@ const ResumeAnalyzer = () => {
   const [analysisData, setAnalysisData] = useState<any>(null);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [targetJobTitle, setTargetJobTitle] = useState("");
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const { toast } = useToast();
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -38,21 +40,38 @@ const ResumeAnalyzer = () => {
     formData.append('resume', uploadedFile);
     if (targetJobTitle) formData.append('targetJobTitle', targetJobTitle);
     try {
-      const token = await firebaseAuth.currentUser?.getIdToken();
-      const res = await fetch('/upload', {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: formData,
+      const user = firebaseAuth.currentUser;
+      if (!user) {
+        toast({ title: 'Not Authenticated', description: 'Please sign in to analyze your resume.', variant: 'destructive' });
+        setIsAnalyzing(false);
+        return;
+      }
+
+      const token = await user.getIdToken();
+      const res = await axios.post('/upload', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+          Authorization: token ? `Bearer ${token}` : undefined,
+        },
       });
-      if (!res.ok) throw new Error('Upload failed');
-      const data = await res.json();
-      setAnalysisData(data);
+      setAnalysisData(res.data);
       setAnalysisComplete(true);
-      toast({ title: 'Analysis complete!', description: 'Your resume has been successfully uploaded.' });
+      toast({ title: 'Analysis complete!', description: 'Your resume has been successfully analyzed.' });
     } catch (error: any) {
+      console.error("Analysis Error:", error);
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } finally {
       setIsAnalyzing(false);
+    }
+  };
+
+  const handleFilePreview = () => {
+    if (uploadedFile) {
+      const fileURL = URL.createObjectURL(uploadedFile);
+      setPreviewUrl(fileURL);
+      window.open(fileURL, '_blank'); // Open in new tab
+    } else {
+      toast({ title: 'No file uploaded', description: 'Please upload a resume file to preview.', variant: 'destructive' });
     }
   };
 
@@ -70,95 +89,9 @@ const ResumeAnalyzer = () => {
     return { text: "Needs Improvement", color: "bg-red-100 text-red-800" };
   };
 
-  const mockAnalysisResults = {
-    score: 85,
-    strengths: [
-      { text: "Strong technical skills section with relevant keywords", detail: "You've included modern technologies like React, Node.js, and MongoDB which are highly sought after." },
-      { text: "Clear professional experience with quantified achievements", detail: "Your use of metrics like '30% increase in user engagement' demonstrates impact." },
-      { text: "Well-formatted and ATS-friendly layout", detail: "Clean structure with proper headings and bullet points for easy parsing." },
-      { text: "Relevant education background for target roles", detail: "Your Computer Science degree aligns well with software development positions." }
-    ],
-    improvements: [
-      { text: "Add more industry-specific keywords to improve ATS compatibility", priority: "High", impact: "+8 points" },
-      { text: "Include a professional summary at the top", priority: "Medium", impact: "+5 points" },
-      { text: "Quantify achievements with specific metrics and percentages", priority: "High", impact: "+7 points" },
-      { text: "Update contact information format for better parsing", priority: "Low", impact: "+2 points" }
-    ],
-    keywords: {
-      found: ["JavaScript", "React", "Node.js", "MongoDB", "Git"],
-      missing: ["TypeScript", "AWS", "Docker", "Kubernetes", "CI/CD"],
-      placement: [
-        { keyword: "TypeScript", suggestion: "Add to technical skills section" },
-        { keyword: "AWS", suggestion: "Include in recent project descriptions" },
-        { keyword: "Docker", suggestion: "Mention in development workflow" }
-      ]
-    },
-    formatting: [
-      { issue: "Font consistency maintained throughout", status: "good" },
-      { issue: "Proper use of white space", status: "good" },
-      { issue: "Consider using bullet points instead of paragraphs", status: "warning" }
-    ]
-  };
-
-  const recommendedJobs = [
-    {
-      id: 1,
-      title: "Senior Frontend Developer",
-      company: "TechCorp Inc.",
-      location: "San Francisco, CA",
-      salary: "$120k - $150k",
-      matchScore: 95,
-      type: "Full-time",
-      posted: "2 days ago",
-      description: "Looking for a skilled React developer to join our growing team.",
-      skills: ["React", "TypeScript", "Node.js"]
-    },
-    {
-      id: 2,
-      title: "Full Stack Developer",
-      company: "StartupXYZ",
-      location: "Remote",
-      salary: "$100k - $130k",
-      matchScore: 88,
-      type: "Full-time",
-      posted: "1 day ago",
-      description: "Build amazing web applications with modern technologies.",
-      skills: ["JavaScript", "React", "MongoDB"]
-    },
-    {
-      id: 3,
-      title: "React Developer",
-      company: "Innovation Labs",
-      location: "New York, NY",
-      salary: "$90k - $120k",
-      matchScore: 82,
-      type: "Contract",
-      posted: "3 days ago",
-      description: "Create beautiful user interfaces for our SaaS platform.",
-      skills: ["React", "JavaScript", "Git"]
-    }
-  ];
-
-  const scoreBadge = getScoreBadge(mockAnalysisResults.score);
-
   return (
     <div className="min-h-screen bg-background">
       <Header />
-      {analysisComplete && analysisData && (
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>Upload Response</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <pre className="text-sm bg-gray-100 p-4 rounded">
-              {JSON.stringify(analysisData, null, 2)}
-            </pre>
-            <Button variant="outline" onClick={() => { setAnalysisComplete(false); setAnalysisData(null); setUploadedFile(null); }}>
-              Analyze Another
-            </Button>
-          </CardContent>
-        </Card>
-      )}
 
       <div className="container mx-auto px-4 py-12">
         <div className="max-w-6xl mx-auto">
@@ -222,7 +155,7 @@ const ResumeAnalyzer = () => {
                         <span className="text-sm font-medium">{uploadedFile.name}</span>
                       </div>
                       <div className="flex items-center space-x-2">
-                        <Button variant="ghost" size="sm">
+                        <Button variant="ghost" size="sm" onClick={handleFilePreview}>
                           <Eye className="h-4 w-4 mr-1" />
                           Preview
                         </Button>
@@ -279,19 +212,19 @@ const ResumeAnalyzer = () => {
                   <CardContent>
                     <div className="flex items-center justify-between mb-4">
                       <div>
-                        <span className={`text-4xl font-bold ${getScoreColor(mockAnalysisResults.score)}`}>
-                          {mockAnalysisResults.score}
+                        <span className={`text-4xl font-bold ${getScoreColor(analysisData.score)}`}>
+                          {analysisData.score}
                         </span>
                         <span className="text-2xl text-gray-400">/100</span>
                       </div>
                       <div className="text-right">
-                        <Badge className={scoreBadge.color}>
-                          {scoreBadge.text}
+                        <Badge className={getScoreBadge(analysisData.score).color}>
+                          {getScoreBadge(analysisData.score).text}
                         </Badge>
                         <p className="text-sm text-gray-600 mt-1">Your resume is in excellent shape</p>
                       </div>
                     </div>
-                    <Progress value={mockAnalysisResults.score} className="w-full" />
+                    <Progress value={analysisData.score} className="w-full" />
                   </CardContent>
                 </Card>
 
@@ -305,17 +238,15 @@ const ResumeAnalyzer = () => {
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-4">
-                      {mockAnalysisResults.strengths.map((strength, index) => (
-                        <div key={index} className="border rounded-lg p-4">
-                          <div className="flex items-start">
-                            <CheckCircle className="h-4 w-4 text-green-500 mr-2 mt-0.5 flex-shrink-0" />
-                            <div>
-                              <span className="text-gray-700 font-medium">{strength.text}</span>
-                              <p className="text-sm text-gray-600 mt-1">{strength.detail}</p>
-                            </div>
+                      {analysisData.strengths && Array.isArray(analysisData.strengths) ? (
+                        analysisData.strengths.map((strength: string, index: number) => (
+                          <div key={index} className="border rounded-lg p-4">
+                            <span className="text-gray-700 font-medium">{strength}</span>
                           </div>
-                        </div>
-                      ))}
+                        ))
+                      ) : (
+                        <p className="text-gray-500 text-sm">No strengths identified.</p>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -330,24 +261,15 @@ const ResumeAnalyzer = () => {
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-4">
-                      {mockAnalysisResults.improvements.map((improvement, index) => (
-                        <div key={index} className="border rounded-lg p-4">
-                          <div className="flex items-start justify-between">
-                            <div className="flex items-start">
-                              <AlertCircle className="h-4 w-4 text-orange-500 mr-2 mt-0.5 flex-shrink-0" />
-                              <span className="text-gray-700">{improvement.text}</span>
-                            </div>
-                            <div className="flex space-x-2">
-                              <Badge variant="outline" className={improvement.priority === "High" ? "border-red-200 text-red-700" : improvement.priority === "Medium" ? "border-yellow-200 text-yellow-700" : "border-gray-200 text-gray-700"}>
-                                {improvement.priority}
-                              </Badge>
-                              <Badge variant="secondary">
-                                {improvement.impact}
-                              </Badge>
-                            </div>
+                      {analysisData.improvements && Array.isArray(analysisData.improvements) ? (
+                        analysisData.improvements.map((improvement: string, index: number) => (
+                          <div key={index} className="border rounded-lg p-4">
+                            <span className="text-gray-700">{improvement}</span>
                           </div>
-                        </div>
-                      ))}
+                        ))
+                      ) : (
+                        <p className="text-gray-500 text-sm">No areas for improvement identified.</p>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -362,35 +284,166 @@ const ResumeAnalyzer = () => {
                       <div>
                         <h4 className="font-semibold text-green-600 mb-3">Keywords Found</h4>
                         <div className="flex flex-wrap gap-2">
-                          {mockAnalysisResults.keywords.found.map((keyword, index) => (
-                            <Badge key={index} variant="secondary" className="bg-green-100 text-green-800">
-                              {keyword}
-                            </Badge>
-                          ))}
+                          {analysisData.keywords?.found && Array.isArray(analysisData.keywords.found) ? (
+                            analysisData.keywords.found.map((keyword: string, index: number) => (
+                              <Badge key={index} variant="secondary" className="bg-green-100 text-green-800">
+                                {keyword}
+                              </Badge>
+                            ))
+                          ) : (
+                            <p className="text-gray-500 text-sm">No keywords found.</p>
+                          )}
                         </div>
                       </div>
                       <div>
                         <h4 className="font-semibold text-orange-600 mb-3">Suggested Keywords</h4>
                         <div className="flex flex-wrap gap-2">
-                          {mockAnalysisResults.keywords.missing.map((keyword, index) => (
-                            <Badge key={index} variant="outline" className="border-orange-200 text-orange-700">
-                              {keyword}
-                            </Badge>
-                          ))}
+                          {analysisData.keywords?.missing && Array.isArray(analysisData.keywords.missing) ? (
+                            analysisData.keywords.missing.map((keyword: string, index: number) => (
+                              <Badge key={index} variant="outline" className="border-orange-200 text-orange-700">
+                                {keyword}
+                              </Badge>
+                            ))
+                          ) : (
+                            <p className="text-gray-500 text-sm">No keyword suggestions available.</p>
+                          )}
                         </div>
                       </div>
                     </div>
-                    
                     <div>
                       <h4 className="font-semibold text-blue-600 mb-3">Keyword Placement Suggestions</h4>
                       <div className="space-y-2">
-                        {mockAnalysisResults.keywords.placement.map((item, index) => (
-                          <div key={index} className="flex items-center justify-between p-3 bg-blue-50 rounded-lg">
-                            <span className="font-medium">{item.keyword}</span>
-                            <span className="text-sm text-gray-600">{item.suggestion}</span>
-                          </div>
-                        ))}
+                        {analysisData.keywords?.placement && Array.isArray(analysisData.keywords.placement) ? (
+                          analysisData.keywords.placement.map((item: any, index: number) => (
+                            <div key={index} className="flex items-center justify-between p-3 bg-blue-50 rounded-lg">
+                              <span className="font-medium">{item.keyword}</span>
+                              <span className="text-sm text-gray-600">{item.suggestion}</span>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-gray-500 text-sm">No placement suggestions available.</p>
+                        )}
                       </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Skills */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center text-green-600">
+                      <CheckCircle className="h-5 w-5 mr-2" />
+                      Skills
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex flex-wrap gap-2">
+                      {analysisData.skills && Array.isArray(analysisData.skills) ? (
+                        analysisData.skills.map((skill: string, index: number) => (
+                          <Badge key={index} variant="secondary" className="text-xs">
+                            {skill}
+                          </Badge>
+                        ))
+                      ) : (
+                        <p className="text-gray-500 text-sm">No skills identified.</p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Work Experience */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center text-blue-600">
+                      <Briefcase className="h-5 w-5 mr-2" />
+                      Work Experience
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      {analysisData.workExperience && Array.isArray(analysisData.workExperience) ? (
+                        analysisData.workExperience.map((experience: any, index: number) => (
+                          <div key={index} className="border rounded-lg p-4">
+                            <h4 className="font-semibold">{experience.title}</h4>
+                            <p className="text-sm text-gray-600">{experience.company}</p>
+                            <p className="text-sm text-gray-500">{experience.startDate} - {experience.endDate || 'Present'}</p>
+                            <p className="text-sm text-gray-700 mt-2">{experience.description}</p>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-gray-500 text-sm">No work experience identified.</p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Education */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center text-blue-600">
+                      <BookOpen className="h-5 w-5 mr-2" />
+                      Education
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      {analysisData.education && Array.isArray(analysisData.education) ? (
+                        analysisData.education.map((edu: any, index: number) => (
+                          <div key={index} className="border rounded-lg p-4">
+                            <h4 className="font-semibold">{edu.institution}</h4>
+                            <p className="text-sm text-gray-600">{edu.degree} in {edu.field}</p>
+                            <p className="text-sm text-gray-500">{edu.startDate} - {edu.endDate || 'Present'}</p>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-gray-500 text-sm">No education details identified.</p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Projects */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center text-blue-600">
+                      <BookOpen className="h-5 w-5 mr-2" />
+                      Projects
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      {analysisData.projects && Array.isArray(analysisData.projects) ? (
+                        analysisData.projects.map((project: any, index: number) => (
+                          <div key={index} className="border rounded-lg p-4">
+                            <h4 className="font-semibold text-gray-900">{project.name}</h4>
+                            <p className="text-sm text-gray-600">{project.description}</p>
+                            <p className="text-sm text-gray-500">Technologies: {project.technologies.join(', ')}</p>
+                            {project.link && (
+                              <a href={project.link} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                                View Project
+                              </a>
+                            )}
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-gray-500 text-sm">No projects identified.</p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Certifications */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center text-blue-600">
+                      <BookOpen className="h-5 w-5 mr-2" />
+                      Professional Summary
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div>
+                      <h4 className="font-semibold text-lg">Professional Summary</h4>
+                      <p className="text-sm text-gray-700">{analysisData.summary || 'No summary available.'}</p>
                     </div>
                   </CardContent>
                 </Card>
@@ -427,37 +480,40 @@ const ResumeAnalyzer = () => {
                       Based on your resume analysis, here are jobs that match your profile:
                     </p>
                     <div className="space-y-4">
-                      {recommendedJobs.map((job) => (
-                        <div key={job.id} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
-                          <div className="flex items-start justify-between mb-2">
-                            <h4 className="font-semibold text-gray-900 text-sm">{job.title}</h4>
-                            <Badge className="bg-green-100 text-green-800 text-xs">
-                              {job.matchScore}% Match
-                            </Badge>
-                          </div>
-                          <p className="text-sm text-gray-600 mb-2">{job.company}</p>
-                          <div className="flex items-center text-xs text-gray-500 space-x-3 mb-2">
-                            <div className="flex items-center">
-                              <MapPin className="h-3 w-3 mr-1" />
-                              <span>{job.location}</span>
-                            </div>
-                            <div className="flex items-center">
-                              <DollarSign className="h-3 w-3 mr-1" />
-                              <span>{job.salary}</span>
-                            </div>
-                          </div>
-                          <div className="flex flex-wrap gap-1 mb-3">
-                            {job.skills.slice(0, 3).map((skill, index) => (
-                              <Badge key={index} variant="secondary" className="text-xs">
-                                {skill}
-                              </Badge>
-                            ))}
-                          </div>
-                          <Button size="sm" className="w-full">
-                            View Details
-                          </Button>
+                      {/* Recommended jobs list - this should be dynamically generated based on analysisData */}
+                      <div className="border rounded-lg p-4 hover:shadow-md transition-shadow">
+                        <div className="flex items-start justify-between mb-2">
+                          <h4 className="font-semibold text-gray-900 text-sm">Senior Frontend Developer</h4>
+                          <Badge className="bg-green-100 text-green-800 text-xs">
+                            95% Match
+                          </Badge>
                         </div>
-                      ))}
+                        <p className="text-sm text-gray-600 mb-2">TechCorp Inc.</p>
+                        <div className="flex items-center text-xs text-gray-500 space-x-3 mb-2">
+                          <div className="flex items-center">
+                            <MapPin className="h-3 w-3 mr-1" />
+                            <span>San Francisco, CA</span>
+                          </div>
+                          <div className="flex items-center">
+                            <DollarSign className="h-3 w-3 mr-1" />
+                            <span>$120k - $150k</span>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-1 mb-3">
+                          <Badge variant="secondary" className="text-xs">
+                            React
+                          </Badge>
+                          <Badge variant="secondary" className="text-xs">
+                            TypeScript
+                          </Badge>
+                          <Badge variant="secondary" className="text-xs">
+                            Node.js
+                          </Badge>
+                        </div>
+                        <Button size="sm" className="w-full">
+                          View Details
+                        </Button>
+                      </div>
                     </div>
                     <Button variant="outline" className="w-full mt-4">
                       View All Recommended Jobs
