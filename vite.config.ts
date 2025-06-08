@@ -6,7 +6,7 @@ import { componentTagger } from "lovable-tagger";
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
   server: {
-    host: "::",
+    host: "localhost",
     port: 8080,
     proxy: {
       // Proxy API calls to the Express server
@@ -21,6 +21,11 @@ export default defineConfig(({ mode }) => ({
         secure: false
       },
       '/api/jobs': {
+        target: 'http://localhost:4000',
+        changeOrigin: true,
+        secure: false
+      },
+      '/api/salary-estimate': {
         target: 'http://localhost:4000',
         changeOrigin: true,
         secure: false
