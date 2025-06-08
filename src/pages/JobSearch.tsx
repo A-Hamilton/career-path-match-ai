@@ -13,12 +13,14 @@ const JobSearch = () => {
   const [location, setLocation] = useState("");
   const [jobType, setJobType] = useState("all");
   const [salaryRange, setSalaryRange] = useState("all");
+  const [sortBy, setSortBy] = useState("relevance");
   const [jobs, setJobs] = useState<any[]>([]);
+  const [page, setPage] = useState(0);
+  const [totalResults, setTotalResults] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Fetch jobs from backend proxy
-  const fetchJobs = async () => {
+  // Fetch jobs from backend proxy with pagination
+  const fetchJobs = async (pageNum = 0, append = false) => {
     setLoading(true);
     setError(null);
     let url = `/api/jobs?`;
@@ -33,24 +35,57 @@ const JobSearch = () => {
       if (salaryRange === "100k-150k") { params.append('salary_min', '100000'); params.append('salary_max', '150000'); }
       if (salaryRange === "150k+") { params.append('salary_min', '150000'); }
     }
+    // Add sorting parameter
+    if (sortBy !== "relevance") {
+      params.append('sort', sortBy);
+    }
+    // Add pagination params - limit to 3 jobs per request
+    params.append('page', String(pageNum));
+    params.append('limit', '3');
     url += params.toString();
     try {
       const res = await fetch(url);
+      if (res.status === 429) {
+        throw new Error('API rate limit reached. Please try again later.');
+      }
       if (!res.ok) throw new Error("Failed to fetch jobs");
       const result = await res.json();
-      // TheirStack returns { metadata, data: Job[] }
-      setJobs(result.data || []);
+      const fetchedJobs = result.data || [];
+      setTotalResults(result.metadata?.total_results || 0);
+      // Augment missing salary with AI estimate
+      const jobsWithEstimate = await Promise.all(
+        fetchedJobs.map(async (job) => {
+          if (!job.min_annual_salary_usd && !job.max_annual_salary_usd) {
+            try {
+              const resp = await fetch(
+                `/api/salary-estimate?id=${job.id}&title=${encodeURIComponent(job.job_title)}&location=${encodeURIComponent(job.long_location || '')}`
+              );
+              const json = await resp.json();
+              return { ...job, salary_estimate: json.range };
+            } catch {
+              return { ...job, salary_estimate: 'N/A' };
+            }
+          }
+          return job;
+        })
+      );
+      setJobs(prev => append ? [...prev, ...jobsWithEstimate] : jobsWithEstimate);
+      setPage(pageNum);
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
   };
-
   useEffect(() => {
-    fetchJobs(); // Initial load
+    fetchJobs(0, false); // Initial load
     // eslint-disable-next-line
   }, []);
+  // Trigger new search when sort changes
+  useEffect(() => {
+    fetchJobs(0, false);
+    // eslint-disable-next-line
+  }, [sortBy]);
 
   const getMatchColor = (score: number) => {
     if (score >= 90) return "bg-green-100 text-green-800";
@@ -120,7 +155,7 @@ const JobSearch = () => {
                 </Select>
               </div>
               <div className="flex items-center mt-4 gap-4">
-                <Button className="bg-blue-600 hover:bg-blue-700" onClick={fetchJobs}>
+                <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => fetchJobs(0, false)}>
                   <Search className="h-4 w-4 mr-2" />
                   Search Jobs
                 </Button>
@@ -134,8 +169,7 @@ const JobSearch = () => {
           <div className="flex items-center justify-between mb-6">
             <p className="text-gray-600">
               {jobs.length} jobs found {searchTerm && `for "${searchTerm}"`}
-            </p>
-            <Select defaultValue="relevance">
+            </p>            <Select value={sortBy} onValueChange={setSortBy}>
               <SelectTrigger className="w-48">
                 <SelectValue placeholder="Sort by" />
               </SelectTrigger>
@@ -194,7 +228,11 @@ const JobSearch = () => {
                           </div>
                           <div className="flex items-center">
                             <DollarSign className="h-4 w-4 mr-1" />
-                            <span>{job.min_annual_salary_usd ? `$${job.min_annual_salary_usd.toLocaleString()}` : "N/A"} - {job.max_annual_salary_usd ? `$${job.max_annual_salary_usd.toLocaleString()}` : "N/A"}</span>
+                            <span>
+                              {job.min_annual_salary_usd || job.max_annual_salary_usd
+                                ? `${job.min_annual_salary_usd ? `$${job.min_annual_salary_usd.toLocaleString()}` : ''}${job.max_annual_salary_usd ? ` - $${job.max_annual_salary_usd.toLocaleString()}` : ''}`
+                                : job.salary_estimate || 'N/A'}
+                            </span>
                           </div>
                           <div className="flex items-center">
                             <Clock className="h-4 w-4 mr-1" />
@@ -231,17 +269,29 @@ const JobSearch = () => {
                   setLocation("");
                   setJobType("all");
                   setSalaryRange("all");
-                  fetchJobs();
+                  fetchJobs(0, false);
                 }}
               >
                 Clear Filters
               </Button>
             </div>
+          )}          {/* Load More (pagination) */}
+          {!loading && !error && jobs.length > 0 && jobs.length < totalResults && (
+            <div className="text-center mt-6">
+              <Button 
+                onClick={() => fetchJobs(page + 1, true)}
+                disabled={loading}
+              >
+                {loading ? "Loading..." : "Load More"}
+              </Button>
+              <p className="text-sm text-gray-500 mt-2">
+                Showing {jobs.length} of {totalResults} jobs
+              </p>
+            </div>
           )}
-          {/* Load More (pagination) could be added here */}
-        </div>
-      </div>
-      <Footer />
+         </div>
+       </div>
+       <Footer />
     </div>
   );
 };
