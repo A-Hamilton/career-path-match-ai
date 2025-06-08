@@ -16,7 +16,13 @@ A modern web application that empowers users to optimize their resumes, explore 
 
 - Node.js (>=16)
 - npm or yarn
-- Firebase project with Auth enabled and service account JSON
+- **Firebase project with Auth enabled and Service Account JSON**
+  1. Go to your Firebase Console at https://console.firebase.google.com/
+  2. Select your project and click the ⚙️ **Settings** icon.
+  3. Navigate to the **Service accounts** tab.
+  4. Click **Generate new private key**, then confirm to download the JSON key file.
+  5. Save this file securely on your local machine.
+  6. Note its path—you will use this path for the `GOOGLE_APPLICATION_CREDENTIALS` environment variable.
 
 ### Installation
 
@@ -74,8 +80,33 @@ npm run dev
 
 ## Deployment
 
-- **Frontend:** Deploy the `dist` folder to Netlify, Vercel, or any static host
-- **Backend:** Deploy the `server/src/index.ts` via Heroku, AWS, or Vercel Functions
+1. Login & select Firebase project:
+   ```powershell
+   firebase login
+   firebase use --add       # choose your project alias
+   ```
+2. Build frontend and deploy to Firebase Hosting:
+   ```powershell
+   npm run build
+   firebase deploy --only hosting
+   ```
+3. Firestore rules:
+    - Ensure `firestore.rules` contains:
+      ```js
+      rules_version = '2';
+      service cloud.firestore {
+        match /databases/{database}/documents {
+          match /users/{userId} {
+            allow read, write: if request.auth.uid == userId;
+          }
+        }
+      }
+      ```
+4. Composite indexes (if needed):
+    - For multi-field Firestore queries, add indexes to `firestore.indexes.json` and deploy:
+      ```powershell
+      firebase deploy --only firestore:indexes
+      ```
 
 ## Contributing
 

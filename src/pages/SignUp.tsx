@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup } from "firebase/auth";
-import { firebaseAuth, firebaseDb } from "@/lib/firebase";
+import { createUserWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from "firebase/auth";
+import { firebaseAuth } from "@/lib/firebase";
+import { updateUserProfile } from "@/lib/db";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -9,7 +10,6 @@ import { Label } from "@/components/ui/label";
 import { Eye, EyeOff, FileText, CheckCircle, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
-import { doc, setDoc } from "firebase/firestore";
 
 const SignUp = () => {
   const provider = new GoogleAuthProvider();
@@ -53,16 +53,12 @@ const SignUp = () => {
     }
     setIsLoading(true);
     try {
-      const userCredential = await createUserWithEmailAndPassword(
-        firebaseAuth,
-        formData.email,
-        formData.password
-      );
+      const userCredential = await createUserWithEmailAndPassword(firebaseAuth, formData.email, formData.password);
       // Initialize Firestore document for new user
-      await setDoc(doc(firebaseDb, 'users', userCredential.user.uid), {
+      await updateUserProfile(userCredential.user.uid, {
         name: `${formData.firstName} ${formData.lastName}`,
         email: formData.email
-      }, { merge: true });
+      });
       setIsLoading(false);
       toast({
         title: "Welcome to ResumeMatch AI!",

@@ -19,6 +19,11 @@ export default defineConfig(({ mode }) => ({
         target: 'http://localhost:4000',
         changeOrigin: true,
         secure: false
+      },
+      '/api/jobs': {
+        target: 'http://localhost:4000',
+        changeOrigin: true,
+        secure: false
       }
     }
   },

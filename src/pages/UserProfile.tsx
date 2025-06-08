@@ -12,7 +12,13 @@ import Footer from "@/components/Footer";
 import { User, FileText, Briefcase, GraduationCap, Star, Bookmark, Clock } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { firebaseDb } from "@/lib/firebase";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import {
+  getUserProfile, updateUserProfile,
+  listExperiences, addExperience, updateExperience, deleteExperience,
+  listSavedJobs, addSavedJob, removeSavedJob,
+  listSavedCareerPaths, addSavedCareerPath, removeSavedCareerPath,
+  listApplications, addApplication, updateApplication, deleteApplication
+} from '@/lib/db';
 import { useToast } from '@/hooks/use-toast';
 
 const UserProfile = () => {
@@ -27,16 +33,29 @@ const UserProfile = () => {
     location: '',
     bio: ''
   });
+  const [skills, setSkills] = useState<string[]>([]);
+  const [newSkill, setNewSkill] = useState("");
+  const [experiences, setExperiences] = useState<any[]>([]);
+  const [savedJobs, setSavedJobs] = useState<any[]>([]);
+  const [savedCareerPaths, setSavedCareerPaths] = useState<any[]>([]);
+  const [applicationHistory, setApplicationHistory] = useState<any[]>([]);
+
   useEffect(() => {
     if (!loading && user) {
-      setPersonalInfo(info => ({ ...info, name: user.displayName || '', email: user.email || '' }));
-      // Load saved data from Firestore
       (async () => {
-        const ref = doc(firebaseDb, 'users', user.uid);
-        const snap = await getDoc(ref);
-        if (snap.exists()) {
-          setPersonalInfo(prev => ({ ...prev, ...snap.data() }));
-        }
+        setPersonalInfo(info => ({ ...info, name: user.displayName || '', email: user.email || '' }));
+        const profile = await getUserProfile(user.uid);
+        if (profile) setPersonalInfo(prev => ({ ...prev, ...profile }));
+        // Load skills (if you want to store as array in user doc)
+        if (profile && profile.skills) setSkills(profile.skills);
+        // Experience
+        setExperiences(await listExperiences(user.uid));
+        // Saved Jobs
+        setSavedJobs(await listSavedJobs(user.uid));
+        // Career Paths
+        setSavedCareerPaths(await listSavedCareerPaths(user.uid));
+        // Applications
+        setApplicationHistory(await listApplications(user.uid));
       })();
     }
   }, [user, loading]);
@@ -45,33 +64,113 @@ const UserProfile = () => {
     return <div>Loading profile...</div>;
   }
 
-  const [skills] = useState([
-    "JavaScript", "React", "Node.js", "Python", "AWS", "Docker", "MongoDB"
-  ]);
-
-  const [savedJobs] = useState([
-    { id: 1, title: "Senior Software Engineer", company: "Tech Corp", location: "San Francisco, CA", salary: "$120k - $180k", saved: "2 days ago" },
-    { id: 2, title: "Full Stack Developer", company: "StartupXYZ", location: "Remote", salary: "$100k - $150k", saved: "1 week ago" },
-    { id: 3, title: "Frontend Engineer", company: "Design Co", location: "New York, NY", salary: "$90k - $130k", saved: "2 weeks ago" }
-  ]);
-
-  const [savedCareerPaths] = useState([
-    { id: 1, title: "Software Engineering Manager", level: "Senior", growth: "+15%", saved: "3 days ago" },
-    { id: 2, title: "DevOps Engineer", level: "Mid-level", growth: "+22%", saved: "1 week ago" }
-  ]);
-
-  const [applicationHistory] = useState([
-    { id: 1, title: "Senior Developer", company: "TechFlow", status: "In Review", applied: "1 week ago" },
-    { id: 2, title: "Full Stack Engineer", company: "CodeBase", status: "Interview Scheduled", applied: "2 weeks ago" },
-    { id: 3, title: "Software Engineer", company: "InnovateTech", status: "Rejected", applied: "3 weeks ago" }
-  ]);
-
   const getStatusColor = (status: string) => {
     switch (status) {
       case "In Review": return "bg-yellow-100 text-yellow-800";
       case "Interview Scheduled": return "bg-green-100 text-green-800";
       case "Rejected": return "bg-red-100 text-red-800";
       default: return "bg-gray-100 text-gray-800";
+    }
+  };
+
+  // Handler examples (add more as needed)
+  // Add skill
+  const handleAddSkill = async () => {
+    if (newSkill.trim() && !skills.includes(newSkill.trim()) && user) {
+      const updatedSkills = [...skills, newSkill.trim()];
+      setSkills(updatedSkills);
+      setNewSkill("");
+      await updateUserProfile(user.uid, { skills: updatedSkills });
+      toast({ title: 'Skill added', description: `${newSkill.trim()} added to your skills.` });
+    }
+  };
+  // Remove skill
+  const handleRemoveSkill = async (skill: string) => {
+    if (user) {
+      const updatedSkills = skills.filter(s => s !== skill);
+      setSkills(updatedSkills);
+      await updateUserProfile(user.uid, { skills: updatedSkills });
+      toast({ title: 'Skill removed', description: `${skill} removed from your skills.` });
+    }
+  };
+  // Add experience
+  const handleAddExperience = async (exp: any) => {
+    if (user) {
+      await addExperience(user.uid, exp);
+      setExperiences(await listExperiences(user.uid));
+      toast({ title: 'Experience added' });
+    }
+  };
+  // Update experience
+  const handleUpdateExperience = async (expId: string, exp: any) => {
+    if (user) {
+      await updateExperience(user.uid, expId, exp);
+      setExperiences(await listExperiences(user.uid));
+      toast({ title: 'Experience updated' });
+    }
+  };
+  // Delete experience
+  const handleDeleteExperience = async (expId: string) => {
+    if (user) {
+      await deleteExperience(user.uid, expId);
+      setExperiences(await listExperiences(user.uid));
+      toast({ title: 'Experience deleted' });
+    }
+  };
+  // Add saved job
+  const handleAddSavedJob = async (job: any) => {
+    if (user) {
+      await addSavedJob(user.uid, job);
+      setSavedJobs(await listSavedJobs(user.uid));
+      toast({ title: 'Job saved' });
+    }
+  };
+  // Remove saved job
+  const handleRemoveSavedJob = async (jobId: string) => {
+    if (user) {
+      await removeSavedJob(user.uid, jobId);
+      setSavedJobs(await listSavedJobs(user.uid));
+      toast({ title: 'Job removed from saved' });
+    }
+  };
+  // Add saved career path
+  const handleAddSavedCareerPath = async (path: any) => {
+    if (user) {
+      await addSavedCareerPath(user.uid, path);
+      setSavedCareerPaths(await listSavedCareerPaths(user.uid));
+      toast({ title: 'Career path saved' });
+    }
+  };
+  // Remove saved career path
+  const handleRemoveSavedCareerPath = async (pathId: string) => {
+    if (user) {
+      await removeSavedCareerPath(user.uid, pathId);
+      setSavedCareerPaths(await listSavedCareerPaths(user.uid));
+      toast({ title: 'Career path removed from saved' });
+    }
+  };
+  // Add application
+  const handleAddApplication = async (app: any) => {
+    if (user) {
+      await addApplication(user.uid, app);
+      setApplicationHistory(await listApplications(user.uid));
+      toast({ title: 'Application added' });
+    }
+  };
+  // Update application
+  const handleUpdateApplication = async (appId: string, data: any) => {
+    if (user) {
+      await updateApplication(user.uid, appId, data);
+      setApplicationHistory(await listApplications(user.uid));
+      toast({ title: 'Application updated' });
+    }
+  };
+  // Delete application
+  const handleDeleteApplication = async (appId: string) => {
+    if (user) {
+      await deleteApplication(user.uid, appId);
+      setApplicationHistory(await listApplications(user.uid));
+      toast({ title: 'Application deleted' });
     }
   };
 
@@ -142,17 +241,20 @@ const UserProfile = () => {
                       ))}
                     </div>
                   </div>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <Input value={newSkill} onChange={(e) => setNewSkill(e.target.value)} placeholder="Add a new skill" />
+                    <Button onClick={handleAddSkill}>Add Skill</Button>
+                  </div>
                   <Button disabled={isSaving} onClick={async () => {
                       setIsSaving(true);
                       if (user) {
-                        const ref = doc(firebaseDb, 'users', user.uid);
-                        await setDoc(ref, {
+                        await updateUserProfile(user.uid, {
                           name: personalInfo.name,
                           email: personalInfo.email,
                           phone: personalInfo.phone,
                           location: personalInfo.location,
                           bio: personalInfo.bio
-                        }, { merge: true });
+                        });
                         toast({ title: 'Profile Saved', description: 'Your changes have been stored.' });
                       }
                       setIsSaving(false);
@@ -206,17 +308,18 @@ const UserProfile = () => {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
-                    <div className="border-l-2 border-blue-200 pl-4 pb-4">
-                      <h3 className="font-semibold">Senior Software Engineer</h3>
-                      <p className="text-gray-600">TechCorp Inc. • 2022 - Present</p>
-                      <p className="text-sm text-gray-600 mt-2">Led development of microservices architecture serving 1M+ users daily.</p>
-                    </div>
-                    <div className="border-l-2 border-blue-200 pl-4 pb-4">
-                      <h3 className="font-semibold">Software Engineer</h3>
-                      <p className="text-gray-600">StartupXYZ • 2020 - 2022</p>
-                      <p className="text-sm text-gray-600 mt-2">Built scalable web applications using React and Node.js.</p>
-                    </div>
-                    <Button variant="outline" className="w-full">
+                    {experiences.map((experience) => (
+                      <div key={experience.id} className="border-l-2 border-blue-200 pl-4 pb-4">
+                        <h3 className="font-semibold">{experience.title}</h3>
+                        <p className="text-gray-600">{experience.company} • {experience.years}</p>
+                        <p className="text-sm text-gray-600 mt-2">{experience.description}</p>
+                        <div className="flex space-x-2 mt-2">
+                          <Button size="sm" onClick={() => handleUpdateExperience(experience.id, { ...experience, title: 'Updated Title' })}>Edit</Button>
+                          <Button variant="outline" size="sm" onClick={() => handleDeleteExperience(experience.id)}>Remove</Button>
+                        </div>
+                      </div>
+                    ))}
+                    <Button variant="outline" className="w-full" onClick={() => handleAddExperience({ title: 'New Position', company: 'New Company', years: '2023 - Present', description: 'New job description' })}>
                       Add Experience
                     </Button>
                   </div>
@@ -245,7 +348,7 @@ const UserProfile = () => {
                           </div>
                           <div className="flex space-x-2">
                             <Button size="sm">Apply Now</Button>
-                            <Button variant="outline" size="sm">Remove</Button>
+                            <Button variant="outline" size="sm" onClick={() => handleRemoveSavedJob(job.id)}>Remove</Button>
                           </div>
                         </div>
                       </div>
@@ -276,7 +379,7 @@ const UserProfile = () => {
                           </div>
                           <div className="flex space-x-2">
                             <Button size="sm">Explore</Button>
-                            <Button variant="outline" size="sm">Remove</Button>
+                            <Button variant="outline" size="sm" onClick={() => handleRemoveSavedCareerPath(path.id)}>Remove</Button>
                           </div>
                         </div>
                       </div>

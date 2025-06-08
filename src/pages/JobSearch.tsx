@@ -1,5 +1,4 @@
-
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Search, MapPin, Filter, Briefcase, Clock, DollarSign, Building, Heart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,102 +13,44 @@ const JobSearch = () => {
   const [location, setLocation] = useState("");
   const [jobType, setJobType] = useState("all");
   const [salaryRange, setSalaryRange] = useState("all");
+  const [jobs, setJobs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const jobs = [
-    {
-      id: 1,
-      title: "Senior Frontend Developer",
-      company: "TechCorp Inc.",
-      location: "San Francisco, CA",
-      type: "Full-time",
-      salary: "$120k - $150k",
-      posted: "2 days ago",
-      description: "We're looking for a skilled Frontend Developer to join our growing team and help build amazing user experiences.",
-      skills: ["React", "TypeScript", "Next.js", "Tailwind CSS"],
-      remote: true,
-      urgent: false,
-      matchScore: 95
-    },
-    {
-      id: 2,
-      title: "Product Manager",
-      company: "StartupXYZ",
-      location: "New York, NY",
-      type: "Full-time",
-      salary: "$130k - $160k",
-      posted: "1 day ago",
-      description: "Join our product team to define strategy and roadmap for our innovative SaaS platform.",
-      skills: ["Product Strategy", "Analytics", "Agile", "User Research"],
-      remote: false,
-      urgent: true,
-      matchScore: 88
-    },
-    {
-      id: 3,
-      title: "UX/UI Designer",
-      company: "Design Studio Co.",
-      location: "Remote",
-      type: "Contract",
-      salary: "$80k - $100k",
-      posted: "3 days ago",
-      description: "Create beautiful and intuitive user interfaces for our client's digital products.",
-      skills: ["Figma", "Sketch", "Prototyping", "User Testing"],
-      remote: true,
-      urgent: false,
-      matchScore: 78
-    },
-    {
-      id: 4,
-      title: "Data Scientist",
-      company: "Analytics Pro",
-      location: "Austin, TX",
-      type: "Full-time",
-      salary: "$110k - $140k",
-      posted: "1 week ago",
-      description: "Analyze large datasets to extract insights and build predictive models for business growth.",
-      skills: ["Python", "Machine Learning", "SQL", "Tableau"],
-      remote: true,
-      urgent: false,
-      matchScore: 85
-    },
-    {
-      id: 5,
-      title: "DevOps Engineer",
-      company: "CloudTech Solutions",
-      location: "Seattle, WA",
-      type: "Full-time",
-      salary: "$105k - $135k",
-      posted: "4 days ago",
-      description: "Build and maintain our cloud infrastructure and deployment pipelines.",
-      skills: ["AWS", "Docker", "Kubernetes", "Terraform"],
-      remote: true,
-      urgent: true,
-      matchScore: 82
-    },
-    {
-      id: 6,
-      title: "Marketing Manager",
-      company: "Growth Marketing Inc.",
-      location: "Los Angeles, CA",
-      type: "Full-time",
-      salary: "$75k - $95k",
-      posted: "5 days ago",
-      description: "Lead digital marketing campaigns and drive customer acquisition for our growing business.",
-      skills: ["Digital Marketing", "SEO", "Content Strategy", "Analytics"],
-      remote: false,
-      urgent: false,
-      matchScore: 72
+  // Fetch jobs from backend proxy
+  const fetchJobs = async () => {
+    setLoading(true);
+    setError(null);
+    let url = `/api/jobs?`;
+    const params = new URLSearchParams();
+    if (searchTerm) params.append('what', searchTerm);
+    if (location) params.append('where', location);
+    if (jobType !== "all") params.append('contract_type', jobType.toLowerCase());
+    // Salary range parsing
+    if (salaryRange !== "all") {
+      if (salaryRange === "50k-75k") { params.append('salary_min', '50000'); params.append('salary_max', '75000'); }
+      if (salaryRange === "75k-100k") { params.append('salary_min', '75000'); params.append('salary_max', '100000'); }
+      if (salaryRange === "100k-150k") { params.append('salary_min', '100000'); params.append('salary_max', '150000'); }
+      if (salaryRange === "150k+") { params.append('salary_min', '150000'); }
     }
-  ];
+    url += params.toString();
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch jobs");
+      const result = await res.json();
+      // TheirStack returns { metadata, data: Job[] }
+      setJobs(result.data || []);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  const filteredJobs = jobs.filter(job => {
-    const matchesSearch = job.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         job.company.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         job.description.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesLocation = !location || job.location.toLowerCase().includes(location.toLowerCase());
-    const matchesType = jobType === "all" || job.type === jobType;
-    return matchesSearch && matchesLocation && matchesType;
-  });
+  useEffect(() => {
+    fetchJobs(); // Initial load
+    // eslint-disable-next-line
+  }, []);
 
   const getMatchColor = (score: number) => {
     if (score >= 90) return "bg-green-100 text-green-800";
@@ -121,14 +62,12 @@ const JobSearch = () => {
   return (
     <div className="min-h-screen bg-background">
       <Header />
-      
       <div className="container mx-auto px-4 py-12">
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-12">
             <h1 className="text-4xl font-bold text-gray-900 mb-4">Find Your Next Opportunity</h1>
             <p className="text-xl text-gray-600">Discover jobs that match your skills and career goals</p>
           </div>
-
           {/* Search and Filter Section */}
           <Card className="mb-8">
             <CardContent className="p-6">
@@ -161,10 +100,10 @@ const JobSearch = () => {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Types</SelectItem>
-                    <SelectItem value="Full-time">Full-time</SelectItem>
-                    <SelectItem value="Part-time">Part-time</SelectItem>
-                    <SelectItem value="Contract">Contract</SelectItem>
-                    <SelectItem value="Freelance">Freelance</SelectItem>
+                    <SelectItem value="full_time">Full-time</SelectItem>
+                    <SelectItem value="part_time">Part-time</SelectItem>
+                    <SelectItem value="contract">Contract</SelectItem>
+                    <SelectItem value="freelance">Freelance</SelectItem>
                   </SelectContent>
                 </Select>
                 <Select value={salaryRange} onValueChange={setSalaryRange}>
@@ -181,7 +120,7 @@ const JobSearch = () => {
                 </Select>
               </div>
               <div className="flex items-center mt-4 gap-4">
-                <Button className="bg-blue-600 hover:bg-blue-700">
+                <Button className="bg-blue-600 hover:bg-blue-700" onClick={fetchJobs}>
                   <Search className="h-4 w-4 mr-2" />
                   Search Jobs
                 </Button>
@@ -192,10 +131,9 @@ const JobSearch = () => {
               </div>
             </CardContent>
           </Card>
-
           <div className="flex items-center justify-between mb-6">
             <p className="text-gray-600">
-              {filteredJobs.length} jobs found {searchTerm && `for "${searchTerm}"`}
+              {jobs.length} jobs found {searchTerm && `for "${searchTerm}"`}
             </p>
             <Select defaultValue="relevance">
               <SelectTrigger className="w-48">
@@ -209,10 +147,11 @@ const JobSearch = () => {
               </SelectContent>
             </Select>
           </div>
-
           {/* Job Listing Results */}
           <div className="space-y-4">
-            {filteredJobs.map((job) => (
+            {loading && <div className="text-center py-8">Loading jobs...</div>}
+            {error && <div className="text-center text-red-500 py-8">{error}</div>}
+            {!loading && !error && jobs.map((job) => (
               <Card key={job.id} className="group hover:shadow-lg transition-all duration-300 hover:border-blue-200">
                 <CardContent className="p-6">
                   <div className="flex items-start justify-between">
@@ -220,76 +159,59 @@ const JobSearch = () => {
                       <div className="flex items-start justify-between mb-2">
                         <div>
                           <h3 className="text-xl font-semibold text-gray-900 group-hover:text-blue-600 transition-colors">
-                            {job.title}
+                            {job.job_title}
                           </h3>
                           <div className="flex items-center text-gray-600 mt-1 space-x-4">
                             <div className="flex items-center">
                               <Building className="h-4 w-4 mr-1" />
-                              <span>{job.company}</span>
+                              <span>{job.company || job.company_object?.name}</span>
                             </div>
                             <div className="flex items-center">
                               <MapPin className="h-4 w-4 mr-1" />
-                              <span>{job.location}</span>
+                              <span>{job.location || job.long_location}</span>
                             </div>
                           </div>
                         </div>
                         <div className="flex items-center space-x-2">
-                          <Badge className={getMatchColor(job.matchScore)}>
-                            {job.matchScore}% Match
-                          </Badge>
-                          {job.urgent && (
-                            <Badge className="bg-red-100 text-red-800">
-                              Urgent
+                          {job.remote != null && (
+                            <Badge className="bg-blue-100 text-blue-800">
+                              {job.remote ? 'Remote' : 'On-site'}
                             </Badge>
                           )}
-                          {job.remote && (
+                          {(job.min_annual_salary_usd || job.max_annual_salary_usd) && (
                             <Badge variant="outline">
-                              Remote
+                              {job.min_annual_salary_usd ? `$${job.min_annual_salary_usd}` : ''} - {job.max_annual_salary_usd ? `$${job.max_annual_salary_usd}` : ''}
                             </Badge>
                           )}
                         </div>
                       </div>
-
-                      <p className="text-gray-600 mb-4 line-clamp-2">{job.description}</p>
-
+                      <p className="text-gray-600 mb-4 line-clamp-2">{job.description || job.short_description}</p>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-6 text-sm text-gray-500">
                           <div className="flex items-center">
                             <Briefcase className="h-4 w-4 mr-1" />
-                            <span>{job.type}</span>
+                            <span>{job.employment_statuses?.[0] || "N/A"}</span>
                           </div>
                           <div className="flex items-center">
                             <DollarSign className="h-4 w-4 mr-1" />
-                            <span>{job.salary}</span>
+                            <span>{job.min_annual_salary_usd ? `$${job.min_annual_salary_usd.toLocaleString()}` : "N/A"} - {job.max_annual_salary_usd ? `$${job.max_annual_salary_usd.toLocaleString()}` : "N/A"}</span>
                           </div>
                           <div className="flex items-center">
                             <Clock className="h-4 w-4 mr-1" />
-                            <span>{job.posted}</span>
+                            <span>{job.date_posted ? new Date(job.date_posted).toLocaleDateString() : "N/A"}</span>
                           </div>
                         </div>
-
                         <div className="flex items-center space-x-2">
-                          <Button variant="outline" size="sm">
-                            <Heart className="h-4 w-4" />
-                          </Button>
-                          <Button size="sm" className="bg-blue-600 hover:bg-blue-700">
-                            View Details
+                          <Button variant="outline" size="sm" asChild>
+                            <a href={job.url || job.final_url} target="_blank" rel="noopener noreferrer">
+                              View Details
+                            </a>
                           </Button>
                         </div>
                       </div>
-
                       <div className="mt-4">
                         <div className="flex flex-wrap gap-2">
-                          {job.skills.slice(0, 4).map((skill, index) => (
-                            <Badge key={index} variant="secondary" className="text-xs">
-                              {skill}
-                            </Badge>
-                          ))}
-                          {job.skills.length > 4 && (
-                            <Badge variant="outline" className="text-xs">
-                              +{job.skills.length - 4} more
-                            </Badge>
-                          )}
+                          {/* Adzuna does not provide skills directly; you may parse from description or omit */}
                         </div>
                       </div>
                     </div>
@@ -298,8 +220,7 @@ const JobSearch = () => {
               </Card>
             ))}
           </div>
-
-          {filteredJobs.length === 0 && (
+          {!loading && !error && jobs.length === 0 && (
             <div className="text-center py-12">
               <p className="text-gray-500 text-lg">No jobs found matching your criteria.</p>
               <Button 
@@ -310,24 +231,16 @@ const JobSearch = () => {
                   setLocation("");
                   setJobType("all");
                   setSalaryRange("all");
+                  fetchJobs();
                 }}
               >
                 Clear Filters
               </Button>
             </div>
           )}
-
-          {/* Load More */}
-          {filteredJobs.length > 0 && (
-            <div className="text-center mt-8">
-              <Button variant="outline" size="lg">
-                Load More Jobs
-              </Button>
-            </div>
-          )}
+          {/* Load More (pagination) could be added here */}
         </div>
       </div>
-
       <Footer />
     </div>
   );
