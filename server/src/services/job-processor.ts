@@ -2,6 +2,7 @@
 import { jobsIndex } from '../config/algolia';
 import { dbService } from './database';
 import { AIEnrichmentService } from './ai-enrichment';
+import { AISanitizationService } from './ai-sanitization';
 import { API_ENDPOINTS, appConfig } from '../config/app';
 import { logger } from '../utils/logger';
 import axios from 'axios';
@@ -94,6 +95,12 @@ export class JobProcessorService {
       // Location filtering will be done post-processing
       if (queryParams.where) {
         logger.info(`Location filtering for "${queryParams.where}" will be applied post-processing`);
+        
+        // Check if this is an unlikely location combination that should be skipped
+        if (this.shouldSkipLocationSearch(queryParams.where, queryParams.what)) {
+          logger.info(`Skipping TheirStack API call for unlikely location combination: "${queryParams.where}"`);
+          return [];
+        }
       }
 
       // Add salary filters if provided (using correct parameter names)
@@ -192,79 +199,14 @@ export class JobProcessorService {
             filterTerm: locationFilter
           });
         }
-      }
-
-      // Transform TheirStack jobs to our internal format
-      return jobsList.map((job: any) => this.transformTheirStackJob(job));    } catch (error: any) {
+      }      // Transform TheirStack jobs using AI sanitization instead of manual transformation
+      const sanitizedJobs = await AISanitizationService.batchSanitizeJobs(jobsList);
+      
+      return sanitizedJobs;} catch (error: any) {
       logger.error('Error fetching jobs from TheirStack:', error.response?.data || error.message);
       return [];
     }
-  }
-  /**
-   * Transform TheirStack job data to our internal job format
-   */
-  private static transformTheirStackJob(theirStackJob: any): any {
-    const timestamp = Date.now();
-    
-    return {
-      id: `theirstack_${theirStackJob.id || timestamp}_${Math.random().toString(36).substr(2, 9)}`,
-      job_title: theirStackJob.title || theirStackJob.job_title || 'Unknown Position',
-      company: theirStackJob.company?.name || theirStackJob.company_name || 'Unknown Company',
-      location: theirStackJob.location?.name || theirStackJob.location_name || 'Unknown Location',
-      long_location: theirStackJob.location?.full_name || theirStackJob.location_name || 'Unknown Location',
-      description: theirStackJob.description || theirStackJob.summary || 'No description available',
-      short_description: (theirStackJob.summary || theirStackJob.description || theirStackJob.title || 'Job opportunity').substring(0, 200),
-      date_posted: theirStackJob.posted_at || theirStackJob.created_at || new Date().toISOString(),
-      remote: theirStackJob.remote || false,
-      hybrid: theirStackJob.hybrid || false,
-      job_type: theirStackJob.remote ? 'remote' : (theirStackJob.hybrid ? 'hybrid' : 'on-site'),
-      min_annual_salary_usd: theirStackJob.min_annual_salary_usd || null,
-      max_annual_salary_usd: theirStackJob.max_annual_salary_usd || null,
-      country: theirStackJob.location?.country || theirStackJob.country || 'Unknown',
-      industry: theirStackJob.company?.industry || theirStackJob.industry || 'Technology',
-      tags: this.extractTags(theirStackJob),
-      employment_statuses: theirStackJob.employment_type ? [theirStackJob.employment_type] : ['full-time'],
-      url: theirStackJob.apply_url || theirStackJob.url || `https://theirstack.com/jobs/${theirStackJob.id}`,
-      final_url: theirStackJob.apply_url || theirStackJob.url || `https://theirstack.com/jobs/${theirStackJob.id}`,
-      source: 'theirstack'
-    };
-  }
-
-  /**
-   * Extract relevant tags from TheirStack job data
-   */
-  private static extractTags(job: any): string[] {
-    const tags: string[] = [];
-    
-    // Add skills/technologies if available
-    if (job.skills && Array.isArray(job.skills)) {
-      tags.push(...job.skills.map((skill: any) => 
-        typeof skill === 'string' ? skill.toLowerCase() : skill.name?.toLowerCase()
-      ).filter(Boolean));
-    }
-
-    // Add job level/seniority
-    if (job.seniority_level) {
-      tags.push(job.seniority_level.toLowerCase());
-    }
-
-    // Add department/function
-    if (job.department) {
-      tags.push(job.department.toLowerCase());
-    }
-
-    // Add remote work type
-    if (job.remote) {
-      tags.push('remote');
-    }
-    if (job.hybrid) {
-      tags.push('hybrid');
-    }
-
-    return [...new Set(tags)]; // Remove duplicates
-  }
-
-  /**
+  }  /**
    * Check for recent similar jobs to prevent redundant processing (Smart Deduplication)
    */
   private static async checkForRecentSimilarJobs(queryParams: any): Promise<any[] | null> {
@@ -308,5 +250,50 @@ export class JobProcessorService {
       logger.error('Error checking if job exists:', error);
       return false;
     }
+  }
+
+  /**
+   * Determine if a location search is unlikely to yield results and should be skipped
+   * This helps save API credits by avoiding searches for locations that TheirStack
+   * is unlikely to have jobs for (e.g., small cities outside major markets)
+   */
+  private static shouldSkipLocationSearch(location: string, jobTitle?: string): boolean {
+    if (!location) return false;
+    
+    const normalizedLocation = location.toLowerCase().trim();
+    
+    // Never skip remote searches
+    if (normalizedLocation === 'remote' || normalizedLocation.includes('remote')) {
+      return false;
+    }
+    
+    // TheirStack primarily serves global tech markets, skip very specific local searches
+    const smallCities = [
+      'belfast', 'cork', 'galway', 'limerick', 'waterford', // Ireland (outside Dublin)
+      'dundee', 'aberdeen', 'stirling', 'perth', // Scotland (outside major cities)
+      'cardiff', 'swansea', 'newport', // Wales (outside major cities)
+      'bath', 'exeter', 'brighton', 'bournemouth', 'plymouth', // UK smaller cities
+      'regina', 'saskatoon', 'halifax', 'victoria', // Canada smaller cities
+      'albany', 'rochester', 'syracuse', 'buffalo', // US smaller cities
+    ];
+    
+    // Check if the location matches known smaller cities
+    const isSmallCity = smallCities.some(city => normalizedLocation.includes(city));
+    
+    if (isSmallCity) {
+      logger.info(`Location "${location}" identified as small city with limited tech job market`);
+      return true;
+    }
+    
+    // Additional checks for very specific location patterns
+    if (normalizedLocation.includes(',')) {
+      const parts = normalizedLocation.split(',').map(p => p.trim());
+      // Check if it's a very specific location like "Belfast, Northern Ireland"
+      if (parts.length === 2 && smallCities.includes(parts[0])) {
+        return true;
+      }
+    }
+    
+    return false;
   }
 }
