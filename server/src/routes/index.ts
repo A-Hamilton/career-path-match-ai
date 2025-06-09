@@ -20,18 +20,7 @@ router.get('/api/salary-estimate', async (req, res) => {
       return res.status(400).json({ error: 'Missing required parameters: id and title' });
     }
 
-    // Check if we already have salary data for this job
-    try {
-      const existingJob = await dbService.getJobById(id as string);
-      if (existingJob && (existingJob.min_annual_salary_usd || existingJob.max_annual_salary_usd)) {
-        const range = `${existingJob.min_annual_salary_usd || 'N/A'}-${existingJob.max_annual_salary_usd || 'N/A'}`;
-        return res.json({ range });
-      }
-    } catch (error) {
-      console.warn('Could not fetch existing job data:', error);
-    }
-
-    // Estimate salary using AI
+    // Always estimate salary using AI, then upsert in one go
     const mockJob = {
       id: id as string,
       job_title: title as string,
@@ -42,25 +31,28 @@ router.get('/api/salary-estimate', async (req, res) => {
 
     const salaryData = await (AIEnrichmentService as any).estimateSalary(mockJob);
     
+    let range = 'N/A';
+    
     if (salaryData && salaryData.min && salaryData.max) {
-      const range = `${salaryData.min}-${salaryData.max}`;
+      range = `${salaryData.min}-${salaryData.max}`;
       
-      // Try to update the job in database with salary info
+      // Upsert salary info in DB (single call)
       try {
-        await dbService.updateJobSalary(id as string, salaryData.min, salaryData.max);
+        await dbService.upsertJob({
+          id: id as string,
+          min_annual_salary_usd: salaryData.min,
+          max_annual_salary_usd: salaryData.max
+        });
       } catch (error) {
-        console.warn('Could not update job salary in database:', error);
+        console.warn('Could not upsert job salary in database:', error);
       }
-      
-      return res.json({ range });
     }
 
-    // Fallback response
-    res.json({ range: 'N/A' });
+    return res.json({ range });
 
   } catch (error) {
-    console.error('Salary estimation error:', error);
-    res.json({ range: 'N/A' });
+    console.error('Error in salary-estimate endpoint:', error);
+    res.status(500).json({ error: 'Failed to estimate salary' });
   }
 });
 

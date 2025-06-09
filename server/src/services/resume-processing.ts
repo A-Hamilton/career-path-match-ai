@@ -255,30 +255,16 @@ class ResumeProcessingService {
    * Clean JSON response by removing comments and fixing common issues
    */
   private cleanJsonResponse(jsonString: string): string {
-    // Remove single-line comments (// ...)
+    // Remove code fences and comments
+    jsonString = jsonString.replace(/```json|```/g, '');
+    jsonString = jsonString.replace(/\/\*.*?\*\//gs, '');
     jsonString = jsonString.replace(/\/\/.*$/gm, '');
-    
-    // Remove multi-line comments (/* ... */)
-    jsonString = jsonString.replace(/\/\*[\s\S]*?\*\//g, '');
-    
     // Remove trailing commas
-    jsonString = jsonString.replace(/,(\s*[}\]])/g, '$1');
-    
-    // Fix unescaped quotes in string values
-    jsonString = jsonString.replace(/"([^"]*)"([^"]*)"([^"]*)":/g, '"$1\\"$2\\"$3":');
-    
-    // Remove any leading/trailing whitespace and non-JSON content
-    jsonString = jsonString.trim();
-    
-    // Ensure it starts with { and ends with }
-    const startIndex = jsonString.indexOf('{');
-    const endIndex = jsonString.lastIndexOf('}');
-    
-    if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
-      jsonString = jsonString.substring(startIndex, endIndex + 1);
-    }
-    
-    return jsonString;
+    jsonString = jsonString.replace(/,\s*([}\]])/g, '$1');
+    // Extract JSON object if extra text is present
+    const match = jsonString.match(/\{[\s\S]*\}/);
+    if (match) return match[0];
+    return jsonString.trim();
   }
 
   /**

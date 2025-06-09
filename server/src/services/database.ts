@@ -56,7 +56,8 @@ class DatabaseService {
   }
   /**
    * Get jobs with advanced filtering and pagination
-   */  async getJobsWithFilters(filters: {
+   */
+  async getJobsWithFilters(filters: {
     cutoffDate?: string;
     salaryMin?: number;
     salaryMax?: number;
@@ -65,6 +66,7 @@ class DatabaseService {
     offset?: number;
     limit?: number;
   }): Promise<Job[]> {
+    // TODO: For advanced search, consider integrating Algolia or MeiliSearch for full-text and typo-tolerant search.
     try {
       let query: Query<DocumentData> = db.getFirestore().collection(this.jobsCollection);
 

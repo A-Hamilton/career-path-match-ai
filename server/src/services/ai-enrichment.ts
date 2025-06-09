@@ -41,40 +41,27 @@ export class AIEnrichmentService {
   
   public static async enrichJobs(jobs: Job[]): Promise<Job[]> {
     if (!jobs.length) return jobs;
-    
     const jobsNeedingEnrichment = jobs.filter(job => {
       const cacheKey = `enrichment:${job.id}`;
       const cached = enrichmentCache.get(cacheKey);
-      
       if (cached) {
-        // Apply cached enrichment data
         Object.assign(job, cached);
         return false;
       }
-      
       return this.needsEnrichment(job);
     });
-    
     if (!jobsNeedingEnrichment.length) return jobs;
-    
     logger.info(`Enriching ${jobsNeedingEnrichment.length} jobs with AI data`);
-    
-    // Process in batches to respect rate limits
     const batchSize = this.MAX_AI_ENRICHMENTS_PER_REQUEST;
     const batches = [];
     for (let i = 0; i < jobsNeedingEnrichment.length; i += batchSize) {
       batches.push(jobsNeedingEnrichment.slice(i, i + batchSize));
     }
-    
-    // Process first batch only to prevent overwhelming the API
     const batchToProcess = batches[0] || [];
-    
-    for (let i = 0; i < batchToProcess.length; i++) {
-      const job = batchToProcess[i];
+    // Parallelize enrichment within the batch
+    await Promise.all(batchToProcess.map(async (job, i) => {
       const enrichmentData: JobEnrichmentData = {};
-      
       try {
-        // Salary estimation
         if (!job.min_annual_salary_usd && !job.max_annual_salary_usd) {
           const salaryData = await this.estimateSalary(job);
           if (salaryData) {
@@ -84,8 +71,6 @@ export class AIEnrichmentService {
             enrichmentData.max_annual_salary_usd = salaryData.max;
           }
         }
-        
-        // Fields enrichment (country, industry, tags)
         if (!job.country || !job.industry || !job.tags) {
           const fieldsData = await this.enrichFields(job);
           if (fieldsData) {
@@ -103,23 +88,18 @@ export class AIEnrichmentService {
             }
           }
         }
-        
-        // Cache the enrichment data
         if (Object.keys(enrichmentData).length > 0) {
           const cacheKey = `enrichment:${job.id}`;
           enrichmentCache.set(cacheKey, enrichmentData);
         }
-        
-        // Add delay between AI calls
+        // Add delay between AI calls (only if not last in batch)
         if (i < batchToProcess.length - 1) {
           await delay(this.AI_CALL_DELAY_MS);
         }
-        
       } catch (error) {
         logger.warn(`AI enrichment failed for job ${job.id}:`, error);
       }
-    }
-    
+    }));
     return jobs;
   }    private static async estimateSalary(job: Job): Promise<{ min: number; max: number } | null> {
     try {
@@ -160,18 +140,17 @@ export class AIEnrichmentService {
   }
   
   private static cleanJSONResponse(rawText: string): string {
-    // Remove markdown code fences
-    let jsonText = rawText.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?\s*```$/,'').trim();
-    
-    // Find JSON object boundaries
-    const startIdx = jsonText.indexOf('{');
-    const endIdx = jsonText.lastIndexOf('}');
-    
-    if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-      jsonText = jsonText.substring(startIdx, endIdx + 1);
-    }
-    
-    return jsonText;
+    let cleaned = rawText.trim();
+    // Remove code fences and comments
+    cleaned = cleaned.replace(/```json|```/g, '');
+    cleaned = cleaned.replace(/\/\*.*?\*\//gs, '');
+    cleaned = cleaned.replace(/\/\/.*$/gm, '');
+    // Remove trailing commas
+    cleaned = cleaned.replace(/,\s*([}\]])/g, '$1');
+    // Extract JSON object if extra text is present
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match) return match[0];
+    return cleaned;
   }
   
   /**

@@ -1,5 +1,7 @@
 // Database configuration and initialization
 import * as admin from 'firebase-admin';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export class DatabaseConfig {
   private static instance: DatabaseConfig;
@@ -17,8 +19,12 @@ export class DatabaseConfig {
   
   private initializeFirebase(): void {
     if (!admin.apps.length) {
-      admin.initializeApp({ 
-        credential: admin.credential.applicationDefault() 
+      // Use the path from the environment variable, or fallback to a default
+      const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS ||
+        path.join(__dirname, 'serviceAccountKey.json');
+      const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount)
       });
     }
   }
