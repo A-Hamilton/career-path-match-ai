@@ -29,7 +29,6 @@ export class MaintenanceService {
       }
     }    console.log(`Removed ${objectIDs.length} stale jobs from Algolia and Firestore.`);
   }
-
   /**
    * Clear all existing mock/duplicate jobs from Algolia
    * Useful during development to reset job data
@@ -51,9 +50,38 @@ export class MaintenanceService {
         attributesToRetrieve: ['objectID', 'id'],
         hitsPerPage: 1000
       });
+
+      // Search for other mock companies from templates
+      const mockCompanies = ['TechFlow Inc', 'DevCorp Solutions', 'UI Masters', 'DataSys Ltd', 
+                           'Enterprise Tech', 'Analytics Pro', 'BigData Corp', 'AI Innovations', 
+                           'Insights Inc', 'Growth Agency', 'Content Plus', 'Brand Masters', 
+                           'SearchBoost', 'ProductCo', 'Innovation Labs', 'Design Studios', 
+                           'Agile Corp', 'SalesForce Pro', 'Revenue Inc', 'Growth Partners', 
+                           'BizDev Solutions', 'StartupXYZ', 'Data Solutions'];
+      
+      let companyJobs: any[] = [];
+      for (const company of mockCompanies) {
+        try {
+          const { hits } = await jobsIndex.search('', {
+            filters: `company:"${company}"`,
+            attributesToRetrieve: ['objectID', 'id'],
+            hitsPerPage: 1000
+          });
+          companyJobs.push(...hits);
+        } catch (e) {
+          console.warn(`Failed to search for company ${company}:`, e);
+        }
+      }
+
+      // Search for sample job IDs
+      const { hits: sampleJobs } = await jobsIndex.search('', {
+        filters: 'id:sample_job* OR id:job_sample*',
+        attributesToRetrieve: ['objectID', 'id'],
+        hitsPerPage: 1000
+      });
       
       // Combine and deduplicate
-      const allMockJobs = [...techCorpJobs, ...mockUrlJobs];
+      const allMockJobs = [...techCorpJobs, ...mockUrlJobs, ...companyJobs, ...sampleJobs];
       const uniqueObjectIDs = [...new Set(allMockJobs.map((hit: any) => hit.objectID))];
       const uniqueFirestoreIDs = [...new Set(allMockJobs.map((hit: any) => hit.id))];
       
@@ -62,19 +90,28 @@ export class MaintenanceService {
         return;
       }
       
-      // Delete from Algolia
-      await jobsIndex.deleteObjects(uniqueObjectIDs);
+      console.log(`Found ${uniqueObjectIDs.length} mock jobs to clear...`);
+      
+      // Delete from Algolia in batches
+      const batchSize = 100;
+      for (let i = 0; i < uniqueObjectIDs.length; i += batchSize) {
+        const batch = uniqueObjectIDs.slice(i, i + batchSize);
+        await jobsIndex.deleteObjects(batch);
+        console.log(`Deleted batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(uniqueObjectIDs.length/batchSize)} from Algolia`);
+      }
       
       // Delete from Firestore
+      let firestoreDeleted = 0;
       for (const id of uniqueFirestoreIDs) {
         try {
           await dbService.deleteOldJobs(id);
+          firestoreDeleted++;
         } catch (e) {
-          console.warn('Failed to delete mock job from Firestore:', id, e);
+          console.warn('Failed to delete mock job from Firestore:', id);
         }
       }
       
-      console.log(`Cleared ${uniqueObjectIDs.length} mock jobs from Algolia and Firestore.`);
+      console.log(`Successfully cleared ${uniqueObjectIDs.length} mock jobs from Algolia and ${firestoreDeleted} from Firestore.`);
     } catch (error) {
       console.error('Error clearing mock jobs:', error);
     }

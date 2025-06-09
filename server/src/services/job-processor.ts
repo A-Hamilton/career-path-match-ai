@@ -2,6 +2,8 @@
 import { jobsIndex } from '../config/algolia';
 import { dbService } from './database';
 import { AIEnrichmentService } from './ai-enrichment';
+import { API_ENDPOINTS, appConfig } from '../config/app';
+import axios from 'axios';
 
 export class JobProcessorService {
   /**
@@ -13,20 +15,38 @@ export class JobProcessorService {
    * @returns Promise<boolean> - Whether a job was successfully processed
    */  static async fetchAndProcessJob(queryParams: any, searchKey?: string): Promise<boolean> {
     try {
-      // 1. Generate multiple diverse jobs for better search results
-      const mockJobs = JobProcessorService.generateMockJobs(queryParams);
+      // 1. Check if we recently processed similar jobs to avoid duplicates (Smart Deduplication)
+      const recentSimilarJobs = await JobProcessorService.checkForRecentSimilarJobs(queryParams);
+      if (recentSimilarJobs && recentSimilarJobs.length >= 3) {
+        console.log(`Skipping job processing for search ${searchKey || 'unknown'} - found ${recentSimilarJobs.length} recent similar jobs`);
+        return true; // Consider this a success since we have recent data
+      }
+        // 2. Fetch real jobs from TheirStack API
+      const theirStackJobs = await JobProcessorService.fetchJobsFromTheirStack(queryParams);
+      
+      if (!theirStackJobs || theirStackJobs.length === 0) {
+        console.log(`No jobs found from TheirStack for search ${searchKey || 'unknown'}`);
+        return false;
+      }
       
       // Process multiple jobs (2-4 jobs per search) for more realistic results
-      const jobsToProcess = mockJobs.slice(0, Math.floor(Math.random() * 3) + 2);
+      const jobsToProcess = theirStackJobs.slice(0, Math.floor(Math.random() * 3) + 2);
       
       let successCount = 0;
       
       for (const rawJob of jobsToProcess) {
         try {
-          // 2. Enrich with Gemini AI
+          // 3. Check if this specific job already exists
+          const existingJob = await JobProcessorService.checkJobExists(rawJob);
+          if (existingJob) {
+            console.log(`Skipping duplicate job: ${rawJob.job_title} at ${rawJob.company}`);
+            continue;
+          }
+          
+          // 4. Enrich with Gemini AI
           const [enrichedJob] = await AIEnrichmentService.enrichJobs([rawJob]);
 
-          // 3. Save to Firestore
+          // 5. Save to Firestore
           await dbService.upsertJob(enrichedJob);
 
           // 4. Save to Algolia, using the unique job ID as the objectID
@@ -54,86 +74,200 @@ export class JobProcessorService {
       console.error(`Failed to process jobs for search ${searchKey || 'unknown'}:`, error);
       return false;
     }
+  }  /**
+   * Fetch real jobs from TheirStack API
+   */
+  private static async fetchJobsFromTheirStack(queryParams: any): Promise<any[]> {
+    try {
+      if (!appConfig.theirStackApiKey) {
+        console.error('TheirStack API key not configured');
+        return [];
+      }      // Build TheirStack API filters based on API specification
+      const filters: any = {
+        posted_at_max_age_days: 30, // Jobs posted within last 30 days
+        page: 0,
+        limit: 20, // Get more jobs to choose from
+        include_total_results: false // For faster responses
+      };
+
+      // Add search criteria using correct parameter names from API docs
+      if (queryParams.what) {
+        // Use job_title_pattern_or for keyword search (case-insensitive patterns)
+        const searchTerm = queryParams.what.trim();
+        if (searchTerm) {
+          filters.job_title_pattern_or = [searchTerm]; // Must be an array
+        }      }
+
+      if (queryParams.where) {
+        // Use location_name_or for location search
+        const locationTerm = queryParams.where.trim();
+        if (locationTerm) {
+          filters.location_name_or = [locationTerm]; // Must be an array
+        }      }
+
+      // Add salary filters if provided (only include supported fields)
+      if (queryParams.salary_min) {
+        filters.min_annual_salary_usd_gte = parseInt(queryParams.salary_min);
+      }
+      if (queryParams.salary_max) {
+        filters.max_annual_salary_usd_lte = parseInt(queryParams.salary_max);
+      }console.log(`Fetching jobs from TheirStack API with filters:`, filters);
+
+      const response = await axios.post(
+        API_ENDPOINTS.THEIRSTACK_SEARCH,
+        filters,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${appConfig.theirStackApiKey}`
+          },
+          timeout: 15000, // Increased timeout
+          validateStatus: (status) => status < 500 // Accept 4xx errors to handle them gracefully
+        }
+      );
+
+      if (response.status === 402) {
+        console.warn('TheirStack API: Payment required or quota exceeded');
+        return [];
+      }
+
+      if (response.status === 429) {
+        console.warn('TheirStack API: Rate limit reached');
+        return [];
+      }
+
+      if (response.status === 422) {
+        console.error('TheirStack API: Invalid parameters:', response.data);
+        return [];
+      }
+
+      if (response.status !== 200) {
+        console.error(`TheirStack API returned status ${response.status}:`, response.data);
+        return [];
+      }
+
+      const result = response.data;
+      const jobsList = Array.isArray(result.data) ? result.data : [];
+
+      console.log(`Retrieved ${jobsList.length} jobs from TheirStack API`);
+
+      // Transform TheirStack jobs to our internal format
+      return jobsList.map((job: any) => this.transformTheirStackJob(job));
+
+    } catch (error: any) {
+      console.error('Error fetching jobs from TheirStack:', error.response?.data || error.message);
+      return [];
+    }
+  }
+  /**
+   * Transform TheirStack job data to our internal job format
+   */
+  private static transformTheirStackJob(theirStackJob: any): any {
+    const timestamp = Date.now();
+    
+    return {
+      id: `theirstack_${theirStackJob.id || timestamp}_${Math.random().toString(36).substr(2, 9)}`,
+      job_title: theirStackJob.title || theirStackJob.job_title || 'Unknown Position',
+      company: theirStackJob.company?.name || theirStackJob.company_name || 'Unknown Company',
+      location: theirStackJob.location?.name || theirStackJob.location_name || 'Unknown Location',
+      long_location: theirStackJob.location?.full_name || theirStackJob.location_name || 'Unknown Location',
+      description: theirStackJob.description || theirStackJob.summary || 'No description available',
+      short_description: (theirStackJob.summary || theirStackJob.description || theirStackJob.title || 'Job opportunity').substring(0, 200),
+      date_posted: theirStackJob.posted_at || theirStackJob.created_at || new Date().toISOString(),
+      remote: theirStackJob.remote || false,
+      hybrid: theirStackJob.hybrid || false,
+      job_type: theirStackJob.remote ? 'remote' : (theirStackJob.hybrid ? 'hybrid' : 'on-site'),
+      min_annual_salary_usd: theirStackJob.min_annual_salary_usd || null,
+      max_annual_salary_usd: theirStackJob.max_annual_salary_usd || null,
+      country: theirStackJob.location?.country || theirStackJob.country || 'Unknown',
+      industry: theirStackJob.company?.industry || theirStackJob.industry || 'Technology',
+      tags: this.extractTags(theirStackJob),
+      employment_statuses: theirStackJob.employment_type ? [theirStackJob.employment_type] : ['full-time'],
+      url: theirStackJob.apply_url || theirStackJob.url || `https://theirstack.com/jobs/${theirStackJob.id}`,
+      final_url: theirStackJob.apply_url || theirStackJob.url || `https://theirstack.com/jobs/${theirStackJob.id}`,
+      source: 'theirstack'
+    };
   }
 
   /**
-   * Generate realistic mock job data based on search criteria
-   * TODO: Replace this with real TheirStack API integration
+   * Extract relevant tags from TheirStack job data
    */
-  private static generateMockJobs(queryParams: any): any[] {
-    const searchTerm = (queryParams.what || '').toLowerCase();
-    const location = queryParams.where || 'Remote';
+  private static extractTags(job: any): string[] {
+    const tags: string[] = [];
     
-    // Job templates based on search terms
-    const jobTemplates = {
-      'software': [
-        { title: 'Senior Software Engineer', company: 'TechFlow Inc', industry: 'Technology', salary: [120000, 180000] },
-        { title: 'Full Stack Developer', company: 'DevCorp Solutions', industry: 'Software', salary: [90000, 140000] },
-        { title: 'Frontend Engineer', company: 'UI Masters', industry: 'Technology', salary: [85000, 130000] },
-        { title: 'Backend Developer', company: 'DataSys Ltd', industry: 'Technology', salary: [95000, 145000] },
-        { title: 'Software Architect', company: 'Enterprise Tech', industry: 'Technology', salary: [150000, 220000] }
-      ],
-      'data': [
-        { title: 'Data Scientist', company: 'Analytics Pro', industry: 'Data & Analytics', salary: [110000, 170000] },
-        { title: 'Data Engineer', company: 'BigData Corp', industry: 'Technology', salary: [105000, 160000] },
-        { title: 'Machine Learning Engineer', company: 'AI Innovations', industry: 'Technology', salary: [125000, 190000] },
-        { title: 'Data Analyst', company: 'Insights Inc', industry: 'Analytics', salary: [70000, 110000] }
-      ],
-      'marketing': [
-        { title: 'Digital Marketing Manager', company: 'Growth Agency', industry: 'Marketing', salary: [80000, 120000] },
-        { title: 'Content Marketing Specialist', company: 'Content Plus', industry: 'Marketing', salary: [60000, 90000] },
-        { title: 'Marketing Director', company: 'Brand Masters', industry: 'Marketing', salary: [130000, 180000] },
-        { title: 'SEO Specialist', company: 'SearchBoost', industry: 'Digital Marketing', salary: [55000, 85000] }
-      ],
-      'product': [
-        { title: 'Product Manager', company: 'ProductCo', industry: 'Technology', salary: [130000, 190000] },
-        { title: 'Senior Product Manager', company: 'Innovation Labs', industry: 'Technology', salary: [150000, 220000] },
-        { title: 'Product Designer', company: 'Design Studios', industry: 'Design', salary: [95000, 140000] },
-        { title: 'Product Owner', company: 'Agile Corp', industry: 'Technology', salary: [110000, 160000] }
-      ],
-      'sales': [
-        { title: 'Sales Manager', company: 'SalesForce Pro', industry: 'Sales', salary: [80000, 130000] },
-        { title: 'Account Executive', company: 'Revenue Inc', industry: 'Sales', salary: [60000, 100000] },
-        { title: 'Sales Director', company: 'Growth Partners', industry: 'Sales', salary: [140000, 200000] },
-        { title: 'Business Development Rep', company: 'BizDev Solutions', industry: 'Sales', salary: [50000, 80000] }
-      ]
-    };
-
-    // Find matching templates based on search term
-    let selectedTemplates = jobTemplates['software']; // default
-    for (const [key, templates] of Object.entries(jobTemplates)) {
-      if (searchTerm.includes(key)) {
-        selectedTemplates = templates;
-        break;
-      }
+    // Add skills/technologies if available
+    if (job.skills && Array.isArray(job.skills)) {
+      tags.push(...job.skills.map((skill: any) => 
+        typeof skill === 'string' ? skill.toLowerCase() : skill.name?.toLowerCase()
+      ).filter(Boolean));
     }
 
-    // Generate jobs from templates
-    return selectedTemplates.map((template, index) => {
-      const timestamp = Date.now() + index; // Ensure unique IDs
-      const salaryMin = template.salary[0] + Math.floor(Math.random() * 10000);
-      const salaryMax = template.salary[1] + Math.floor(Math.random() * 15000);
+    // Add job level/seniority
+    if (job.seniority_level) {
+      tags.push(job.seniority_level.toLowerCase());
+    }
+
+    // Add department/function
+    if (job.department) {
+      tags.push(job.department.toLowerCase());
+    }
+
+    // Add remote work type
+    if (job.remote) {
+      tags.push('remote');
+    }
+    if (job.hybrid) {
+      tags.push('hybrid');
+    }
+
+    return [...new Set(tags)]; // Remove duplicates
+  }
+
+  /**
+   * Check for recent similar jobs to prevent redundant processing (Smart Deduplication)
+   */
+  private static async checkForRecentSimilarJobs(queryParams: any): Promise<any[] | null> {
+    try {
+      const searchTerm = (queryParams.what || '').toLowerCase();
+      const location = queryParams.where || '';
       
-      return {
-        id: `job_${timestamp}_${Math.random().toString(36).substr(2, 9)}`,
-        job_title: template.title,
-        company: template.company,
-        location: location,
-        long_location: location,
-        description: `Join ${template.company} as a ${template.title}. We're looking for talented professionals to help drive our ${template.industry.toLowerCase()} initiatives forward. This is an excellent opportunity to work with cutting-edge technologies and make a real impact.`,
-        short_description: `Exciting ${template.title} opportunity at ${template.company}`,
-        date_posted: new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000).toISOString(), // Random date within last week        remote: queryParams.remote || location.toLowerCase().includes('remote'),
-        hybrid: Math.random() > 0.7, // 30% chance of hybrid
-        job_type: queryParams.remote || location.toLowerCase().includes('remote') ? 'remote' : 'on-site',
-        min_annual_salary_usd: salaryMin,
-        max_annual_salary_usd: salaryMax,
-        country: 'United States',
-        industry: template.industry,
-        tags: [template.title.toLowerCase().replace(/\s+/g, '-'), template.industry.toLowerCase()],
-        employment_statuses: ['full-time'],
-        url: `https://example.com/jobs/${timestamp}`,
-        final_url: `https://example.com/jobs/${timestamp}`
-      };
-    });
+      // Search for jobs created in the last 4 hours that match the search criteria
+      const cutoffTime = Date.now() - (4 * 60 * 60 * 1000); // 4 hours ago
+      
+      const searchQuery = `${searchTerm} ${location}`.trim();
+      
+      const result = await jobsIndex.search(searchQuery, {
+        filters: `createdAt > ${cutoffTime}`,
+        hitsPerPage: 10
+      });
+      
+      if (result.hits && result.hits.length > 0) {
+        console.log(`Found ${result.hits.length} recent similar jobs for query: ${searchQuery}`);
+        return result.hits;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error checking for recent similar jobs:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Check if a specific job already exists to prevent exact duplicates
+   */
+  private static async checkJobExists(jobData: any): Promise<boolean> {
+    try {
+      // Search for exact matches by title and company
+      const result = await jobsIndex.search('', {
+        filters: `job_title:"${jobData.job_title}" AND company:"${jobData.company}"`,
+        hitsPerPage: 1
+      });
+      
+      return result.hits && result.hits.length > 0;
+    } catch (error) {
+      console.error('Error checking if job exists:', error);
+      return false;
+    }
   }
 }

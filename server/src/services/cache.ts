@@ -69,4 +69,4 @@ export class CacheManager<T> {
 // Cache instances
 export const jobCache = new CacheManager<any>(60 * 60 * 1000); // 1 hour
 export const enrichmentCache = new CacheManager<any>(24 * 60 * 60 * 1000); // 24 hours
-export const queryCache = new CacheManager<any>(30 * 60 * 1000); // 30 minutes
+export const queryCache = new CacheManager<any>(60 * 60 * 1000); // 1 hour (Layer 1 optimization - increased from 30 minutes)

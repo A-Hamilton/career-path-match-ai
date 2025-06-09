@@ -1,5 +1,7 @@
 import { algoliaJobs } from '../config/algolia';
 import { JobProcessorService } from './job-processor';
+import { queryCache } from './cache';
+import { cacheAnalytics } from './cache-analytics';
 
 export interface JobSearchResponse {
   data: any[];
@@ -28,7 +30,7 @@ class RequestTracker {
   private static processingRequests = new Map<string, ProcessingRequest>();
   private static negativeCache = new Map<string, CachedResult>();
   private static readonly PROCESSING_TIMEOUT = 60000; // 1 minute
-  private static readonly CACHE_TTL = 300000; // 5 minutes
+  private static readonly CACHE_TTL = 1800000; // 30 minutes (Layer 3 optimization - increased from 15 minutes)
 
   static generateSearchKey(queryParams: any): string {
     const normalized = {
@@ -110,10 +112,18 @@ class JobSearchService {
   /**
    * Get optimized job search for frontend with query parameters
    * Uses Algolia-first architecture with smart async job processing fallback
-   */
-  async getJobs(queryParams: any): Promise<any> {
+   */  async getJobs(queryParams: any): Promise<any> {
     // Generate unique search key for request tracking
     const searchKey = RequestTracker.generateSearchKey(queryParams);
+      // Check the query cache first (Layer 1 optimization)
+    const cachedResult = queryCache.get(searchKey);
+    if (cachedResult) {
+      console.log(`Returning cached response for search key: ${searchKey}`);
+      cacheAnalytics.recordCacheHit(searchKey);
+      return cachedResult;
+    }
+    
+    cacheAnalytics.recordCacheMiss(searchKey);
     
     // Build the search query - include location in the search query instead of as exact filter
     let searchQuery = queryParams.what || '';
@@ -133,21 +143,24 @@ class JobSearchService {
       // 1. Search Algolia first
       console.log(`Searching Algolia for: "${searchQuery}" with filters: "${algoliaFilters}" (page: ${page}, limit: ${limit})`);
       
+      const startTime = Date.now();
       const algoliaResult = await algoliaJobs.search(searchQuery, {
         filters: algoliaFilters || undefined,
         page,
         hitsPerPage: limit
       });
-
+      const duration = Date.now() - startTime;
+      
+      cacheAnalytics.recordAlgoliaQuery(searchKey, duration);
       console.log(`Algolia search result: ${algoliaResult.hits.length} hits found (total: ${algoliaResult.nbHits})`);
-
+      
       if (algoliaResult.hits && algoliaResult.hits.length > 0) {
         // Clear negative cache since we found results
         RequestTracker.clearCache(searchKey);
         
         // Return Algolia hits immediately
         const totalResults = algoliaResult.nbHits || 0;
-        return {
+        const result = {
           status: 200,
           data: algoliaResult.hits,
           metadata: {
@@ -157,6 +170,11 @@ class JobSearchService {
             has_more: (page + 1) * limit < totalResults
           }
         };
+
+        // Set the result in the query cache before returning (Layer 1 optimization)
+        queryCache.set(searchKey, result);
+        
+        return result;
       } else {
         // No hits: Check smart processing logic
         console.log(`No Algolia hits for search key: ${searchKey}`);
@@ -181,11 +199,9 @@ class JobSearchService {
           searchInProgress: true
         }
       };
-    }
-
-    // Check if we recently found no results for this search
+    }    // Check if we recently found no results for this search
     if (RequestTracker.isCachedEmpty(searchKey)) {
-      return {
+      const emptyResult = {
         status: 200,
         data: [],
         metadata: {
@@ -197,13 +213,20 @@ class JobSearchService {
           message: 'No jobs found for this search criteria.'
         }
       };
-    }
-
-    // Start new async processing
+      
+      // Cache this empty result in queryCache too
+      queryCache.set(searchKey, emptyResult);
+      
+      return emptyResult;
+    }    // Start new async processing
     RequestTracker.startProcessing(searchKey);
       setImmediate(async () => {
       try {
+        const startTime = Date.now();
         const success = await JobProcessorService.fetchAndProcessJob(queryParams, searchKey);
+        const duration = Date.now() - startTime;
+        
+        cacheAnalytics.recordJobProcessing(searchKey, duration);
         RequestTracker.finishProcessing(searchKey, success);
         
         if (!success) {
