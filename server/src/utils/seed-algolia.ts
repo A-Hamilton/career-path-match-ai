@@ -1,4 +1,5 @@
 import { jobsIndex } from '../config/algolia';
+import { logger } from './logger';
 
 const sampleJobs = [
   {
@@ -72,13 +73,12 @@ const sampleJobs = [
   }
 ];
 
-async function seedAlgolia() {
-  try {
-    console.log('Seeding Algolia with sample jobs...');
+async function seedAlgolia() {  try {
+    logger.info('Seeding Algolia with sample jobs...');
     await jobsIndex.saveObjects(sampleJobs);
-    console.log(`Successfully added ${sampleJobs.length} sample jobs to Algolia!`);
+    logger.info(`Successfully added ${sampleJobs.length} sample jobs to Algolia!`);
   } catch (error) {
-    console.error('Error seeding Algolia:', error);
+    logger.error('Error seeding Algolia:', error);
   }
 }
 

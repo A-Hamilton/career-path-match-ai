@@ -48,11 +48,9 @@ class DatabaseService {
         .where('date_posted', '>=', cutoffDate)
         .orderBy('date_posted', 'desc')
         .limit(limit)
-        .get();
-
-      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Job));
+        .get();      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Job));
     } catch (error) {
-      console.error('Error getting recent jobs:', error);
+      logger.error('Error getting recent jobs:', error);
       throw new Error(`Failed to fetch recent jobs: ${error}`);
     }
   }
@@ -95,10 +93,9 @@ class DatabaseService {
         // Fetch a larger set for in-memory filtering.
         // This limit should be high enough to get enough candidates for several pages after filtering.
         // Consider making this configurable or dynamically adjusting if performance issues arise.
-        const preliminaryLimit = 1000; 
-        const snapshot = await query.limit(preliminaryLimit).get();
+        const preliminaryLimit = 1000;        const snapshot = await query.limit(preliminaryLimit).get();
         jobs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Job));
-        console.log(`[DB] Raw jobs fetched for in-memory filtering: ${jobs.length}`);
+        logger.debug(`Raw jobs fetched for in-memory filtering: ${jobs.length}`);
 
         // In-memory filtering for jobTitle
         if (filters.jobTitle) {
@@ -146,9 +143,8 @@ class DatabaseService {
         // Validate location data for filtered jobs
         try {
           const { validateJobLocation } = require('../utils/location-validator');
-          jobs = jobs.map(job => validateJobLocation(job));
-        } catch (error) {
-          console.warn('Failed to validate job locations during in-memory filtering:', error);
+          jobs = jobs.map(job => validateJobLocation(job));        } catch (error) {
+          logger.warn('Failed to validate job locations during in-memory filtering:', error);
         }
 
         // Deduplicate jobs by ID (prevents duplicates after in-memory filtering)
@@ -162,12 +158,10 @@ class DatabaseService {
         // In-memory filtering for remote/on-site status if filter is provided
         if (filters.remote !== undefined) {
           jobs = jobs.filter(job => job.remote === filters.remote);
-        }
-
-        // Normalize remote property for all jobs (ensure boolean or false)
+        }        // Normalize remote property for all jobs (ensure boolean or false)
         jobs = jobs.map(job => ({ ...job, remote: !!job.remote }));
 
-        console.log(`[DB] Jobs after all in-memory filters and deduplication: ${jobs.length}`);
+        logger.debug(`Jobs after all in-memory filters and deduplication: ${jobs.length}`);
 
         // Apply pagination to the in-memory filtered results
         const startIndex = filters.offset || 0;
@@ -181,25 +175,23 @@ class DatabaseService {
         }
         const effectiveLimit = filters.limit || DEFAULT_PAGE_LIMIT;
         query = query.limit(effectiveLimit);
-        
-        const snapshot = await query.get();
+          const snapshot = await query.get();
         jobs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Job));
-        console.log(`[DB] Jobs fetched directly from Firestore with pagination: ${jobs.length}`);
+        logger.debug(`Jobs fetched directly from Firestore with pagination: ${jobs.length}`);
         
         // Validate location data
         try {
           const { validateJobLocation } = require('../utils/location-validator');
-          jobs = jobs.map(job => validateJobLocation(job));
-        } catch (error) {
-          console.warn('Failed to validate job locations for Firestore-paginated results:', error);
+          jobs = jobs.map(job => validateJobLocation(job));        } catch (error) {
+          logger.warn('Failed to validate job locations for Firestore-paginated results:', error);
         }
       }
       
-      console.log(`[DB] Jobs returned after pagination stage: ${jobs.length}`);
+      logger.debug(`Jobs returned after pagination stage: ${jobs.length}`);
       return jobs;
 
     } catch (error) {
-      console.error('Error getting jobs with filters:', error);
+      logger.error('Error getting jobs with filters:', error);
       throw new Error(`Failed to fetch filtered jobs: ${error}`);
     }
   }
@@ -326,10 +318,9 @@ class DatabaseService {
       if (!doc.exists) {
         return null;
       }
-      
-      return { id: doc.id, ...doc.data() } as Job;
+        return { id: doc.id, ...doc.data() } as Job;
     } catch (error) {
-      console.error('Error getting job by ID:', error);
+      logger.error('Error getting job by ID:', error);
       throw error;
     }
   }
@@ -345,10 +336,9 @@ class DatabaseService {
         .update({
           min_annual_salary_usd: minSalary,
           max_annual_salary_usd: maxSalary,
-          updatedAt: new Date()
-        });
+          updatedAt: new Date()        });
     } catch (error) {
-      console.error('Error updating job salary:', error);
+      logger.error('Error updating job salary:', error);
       throw error;
     }
   }
@@ -367,10 +357,8 @@ class DatabaseService {
         ...job,
         date_posted: job.date_posted || job.date_posted,
         cachedAt: FieldValue.serverTimestamp()
-      }, { merge: true });
-
-    } catch (error) {
-      console.error('Error upserting job:', error);
+      }, { merge: true });    } catch (error) {
+      logger.error('Error upserting job:', error);
       throw new Error(`Failed to upsert job: ${error}`);
     }
   }
@@ -385,11 +373,9 @@ class DatabaseService {
       // Process jobs in batches to respect Firestore limits
       for (let i = 0; i < jobs.length; i += this.batchSize) {
         const batch = db.getFirestore().batch();
-        const batchJobs = jobs.slice(i, i + this.batchSize);
-
-        batchJobs.forEach(job => {
+        const batchJobs = jobs.slice(i, i + this.batchSize);        batchJobs.forEach(job => {
           if (!job.id) {
-            console.warn('Skipping job without ID:', job);
+            logger.warn('Skipping job without ID:', job);
             return;
           }
 
@@ -402,11 +388,11 @@ class DatabaseService {
         });
 
         await batch.commit();
-        console.log(`Batch committed: ${batchJobs.length} jobs`);
+        logger.info(`Batch committed: ${batchJobs.length} jobs`);
       }
 
     } catch (error) {
-      console.error('Error batch creating jobs:', error);
+      logger.error('Error batch creating jobs:', error);
       throw new Error(`Failed to batch create jobs: ${error}`);
     }
   }
@@ -426,10 +412,8 @@ class DatabaseService {
       await jobRef.update({
         ...enrichmentData,
         enrichedAt: FieldValue.serverTimestamp()
-      });
-
-    } catch (error) {
-      console.error('Error updating job enrichment:', error);
+      });    } catch (error) {
+      logger.error('Error updating job enrichment:', error);
       throw new Error(`Failed to update job enrichment: ${error}`);
     }
   }
@@ -457,13 +441,11 @@ class DatabaseService {
         await batch.commit();
         
         deletedCount += batchDocs.length;
-      }
-
-      console.log(`Deleted ${deletedCount} old jobs`);
+      }      logger.info(`Deleted ${deletedCount} old jobs`);
       return deletedCount;
 
     } catch (error) {
-      console.error('Error deleting old jobs:', error);
+      logger.error('Error deleting old jobs:', error);
       throw new Error(`Failed to delete old jobs: ${error}`);
     }
   }
@@ -476,11 +458,9 @@ class DatabaseService {
       const resumeRef = await db.getFirestore().collection(this.resumesCollection).add({
         ...resume,
         uploadedAt: FieldValue.serverTimestamp()
-      });
-
-      return resumeRef.id;
+      });      return resumeRef.id;
     } catch (error) {
-      console.error('Error creating resume:', error);
+      logger.error('Error creating resume:', error);
       throw new Error(`Failed to create resume: ${error}`);
     }
   }
@@ -504,10 +484,8 @@ class DatabaseService {
       }
 
       const doc = snapshot.docs[0];
-      return { id: doc.id, ...doc.data() } as Resume;
-
-    } catch (error) {
-      console.error('Error getting resume by filename:', error);
+      return { id: doc.id, ...doc.data() } as Resume;    } catch (error) {
+      logger.error('Error getting resume by filename:', error);
       throw new Error(`Failed to fetch resume: ${error}`);
     }
   }
@@ -520,10 +498,8 @@ class DatabaseService {
       await db.getFirestore().collection(this.resumesCollection).doc(resumeId).update({
         parsedData,
         parsedAt: FieldValue.serverTimestamp()
-      });
-
-    } catch (error) {
-      console.error('Error updating resume parsed data:', error);
+      });    } catch (error) {
+      logger.error('Error updating resume parsed data:', error);
       throw new Error(`Failed to update resume data: ${error}`);
     }
   }
@@ -538,10 +514,8 @@ class DatabaseService {
         .orderBy('uploadedAt', 'desc')
         .get();
 
-      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Resume));
-
-    } catch (error) {
-      console.error('Error getting user resumes:', error);
+      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Resume));    } catch (error) {
+      logger.error('Error getting user resumes:', error);
       throw new Error(`Failed to fetch user resumes: ${error}`);
     }
   }
@@ -569,10 +543,8 @@ class DatabaseService {
         totalJobs: totalJobsSnapshot.data().count,
         recentJobs: recentJobsSnapshot.data().count,
         totalResumes: totalResumesSnapshot.data().count
-      };
-
-    } catch (error) {
-      console.error('Error getting database stats:', error);
+      };    } catch (error) {
+      logger.error('Error getting database stats:', error);
       throw new Error(`Failed to get database statistics: ${error}`);
     }
   }
@@ -584,9 +556,8 @@ class DatabaseService {
     try {
       // Try to read a small collection count
       await db.getFirestore().collection(this.jobsCollection).limit(1).get();
-      return true;
-    } catch (error) {
-      console.error('Database health check failed:', error);
+      return true;    } catch (error) {
+      logger.error('Database health check failed:', error);
       return false;
     }
   }

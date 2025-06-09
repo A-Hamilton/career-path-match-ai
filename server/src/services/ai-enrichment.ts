@@ -162,19 +162,17 @@ export class AIEnrichmentService {
         try {
           const now = Date.now();
           const timeSinceLastCall = now - this.lastAPICall;
-          
-          if (timeSinceLastCall < this.AI_CALL_DELAY_MS) {
+            if (timeSinceLastCall < this.AI_CALL_DELAY_MS) {
             const waitTime = this.AI_CALL_DELAY_MS - timeSinceLastCall;
-            console.log(`Rate limiting: waiting ${waitTime}ms before API call`);
+            logger.debug(`Rate limiting: waiting ${waitTime}ms before API call`);
             await delay(waitTime);
           }
           
           this.lastAPICall = Date.now();
           const result = await apiCall();
-          resolve(result);
-        } catch (error: any) {
+          resolve(result);        } catch (error: any) {
           if (error.status === 429) {
-            console.warn('API rate limit hit, returning null');
+            logger.warn('API rate limit hit, returning null');
             resolve(null);
           } else {
             throw error;

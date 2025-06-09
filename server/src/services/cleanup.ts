@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { dbService } from './database';
 import { JobProcessorService } from './job-processor';
+import { logger } from '../utils/logger';
 
 export interface CleanupStats {
   deletedJobs: number;
@@ -20,15 +21,14 @@ class CleanupService {
   }
   /**
    * Start scheduled cleanup jobs
-   */
-  startScheduledCleanup(): void {
+   */  startScheduledCleanup(): void {
     if (this.cronTasks.length > 0) {
-      console.log('Cleanup service already started');
+      logger.info('Cleanup service already started');
       return;
     }
 
     this.initializeCronJobs();
-    console.log('Cleanup service started');
+    logger.info('Cleanup service started');
   }
   /**
    * Stop scheduled cleanup jobs
@@ -38,14 +38,12 @@ class CleanupService {
       if (task && typeof task.destroy === 'function') {
         task.destroy();
       }
-    });
-    this.cronTasks = [];
-    console.log('Cleanup service stopped');
-  }  /**
+    });    this.cronTasks = [];
+    logger.info('Cleanup service stopped');
+  }/**
    * Initialize all scheduled cleanup jobs
-   */
-  private initializeCronJobs(): void {
-    console.log('Initializing cleanup cron jobs...');
+   */  private initializeCronJobs(): void {
+    logger.info('Initializing cleanup cron jobs...');
 
     // Daily cleanup at midnight
     const dailyTask = cron.schedule(this.scheduleExpression, async () => {
@@ -62,10 +60,9 @@ class CleanupService {
       await this.runCacheWarmingJob();
     });
 
-    // Store tasks for later management
-    this.cronTasks = [dailyTask, weeklyTask, cacheWarmingTask];
+    // Store tasks for later management    this.cronTasks = [dailyTask, weeklyTask, cacheWarmingTask];
 
-    console.log('Cleanup cron jobs initialized and started');
+    logger.info('Cleanup cron jobs initialized and started');
   }
 
   /**
@@ -73,12 +70,12 @@ class CleanupService {
    */
   async runDailyCleanup(): Promise<CleanupStats> {
     if (this.isRunning) {
-      console.log('Cleanup already running, skipping...');
+      logger.info('Cleanup already running, skipping...');
       return { deletedJobs: 0, deletedFiles: 0, errors: ['Cleanup already in progress'] };
     }
 
     this.isRunning = true;
-    console.log('Starting daily cleanup job...');
+    logger.info('Starting daily cleanup job...');
     
     const stats: CleanupStats = {
       deletedJobs: 0,
@@ -95,11 +92,11 @@ class CleanupService {
       const deletedFiles = await this.cleanupOrphanedFiles();
       stats.deletedFiles = deletedFiles;
 
-      console.log(`Daily cleanup completed: ${deletedJobs} jobs, ${deletedFiles} files deleted`);
+      logger.info(`Daily cleanup completed: ${deletedJobs} jobs, ${deletedFiles} files deleted`);
 
     } catch (error: any) {
       const errorMessage = `Daily cleanup error: ${error.message}`;
-      console.error(errorMessage);
+      logger.error(errorMessage);
       stats.errors.push(errorMessage);
     } finally {
       this.isRunning = false;
@@ -112,7 +109,7 @@ class CleanupService {
    * Run weekly deep cleanup tasks
    */
   async runWeeklyCleanup(): Promise<CleanupStats> {
-    console.log('Starting weekly cleanup job...');
+    logger.info('Starting weekly cleanup job...');
     
     const stats: CleanupStats = {
       deletedJobs: 0,
@@ -131,11 +128,11 @@ class CleanupService {
       await this.optimizeDatabase();
       await this.generateCleanupReport();
 
-      console.log('Weekly cleanup completed');
+      logger.info('Weekly cleanup completed');
 
     } catch (error: any) {
       const errorMessage = `Weekly cleanup error: ${error.message}`;
-      console.error(errorMessage);
+      logger.error(errorMessage);
       stats.errors.push(errorMessage);
     }
 
@@ -154,15 +151,15 @@ class CleanupService {
       const deletedCount = await dbService.deleteOldJobs(cutoffDate);
       
       if (deletedCount > 0) {
-        console.log(`Cleanup: deleted ${deletedCount} old jobs`);
+        logger.info(`Cleanup: deleted ${deletedCount} old jobs`);
       } else {
-        console.log('Cleanup: no old jobs to delete');
+        logger.info('Cleanup: no old jobs to delete');
       }
 
       return deletedCount;
 
     } catch (error: any) {
-      console.error('Error cleaning up old jobs:', error);
+      logger.error('Error cleaning up old jobs:', error);
       throw new Error(`Failed to cleanup old jobs: ${error.message}`);
     }
   }
@@ -175,10 +172,10 @@ class CleanupService {
     // that don't have corresponding database records
     try {
       // Placeholder for file cleanup logic
-      console.log('Orphaned file cleanup - not implemented yet');
+      logger.info('Orphaned file cleanup - not implemented yet');
       return 0;
     } catch (error: any) {
-      console.error('Error cleaning up orphaned files:', error);
+      logger.error('Error cleaning up orphaned files:', error);
       throw new Error(`Failed to cleanup orphaned files: ${error.message}`);
     }
   }
@@ -216,11 +213,11 @@ class CleanupService {
         stats.deletedFiles = await this.cleanupOrphanedFiles();
       }
 
-      console.log(`Manual cleanup completed: ${stats.deletedJobs} jobs, ${stats.deletedFiles} files deleted`);
+      logger.info(`Manual cleanup completed: ${stats.deletedJobs} jobs, ${stats.deletedFiles} files deleted`);
 
     } catch (error: any) {
       const errorMessage = `Manual cleanup error: ${error.message}`;
-      console.error(errorMessage);
+      logger.error(errorMessage);
       stats.errors.push(errorMessage);
     }
 
@@ -247,7 +244,7 @@ class CleanupService {
       };
 
     } catch (error: any) {
-      console.error('Error getting cleanup status:', error);
+      logger.error('Error getting cleanup status:', error);
       throw new Error(`Failed to get cleanup status: ${error.message}`);
     }
   }
@@ -259,9 +256,9 @@ class CleanupService {
     try {
       // Placeholder for database optimization
       // Could include index optimization, query analysis, etc.
-      console.log('Database optimization completed');
+      logger.info('Database optimization completed');
     } catch (error: any) {
-      console.error('Database optimization error:', error);
+      logger.error('Database optimization error:', error);
       throw error;
     }
   }
@@ -281,13 +278,13 @@ class CleanupService {
         oldJobsThreshold: this.oldJobsThresholdDays
       };
 
-      console.log('Weekly cleanup report:', JSON.stringify(report, null, 2));
+      logger.info('Weekly cleanup report:', JSON.stringify(report, null, 2));
       
       // In production, this could be sent to monitoring services,
       // saved to a file, or stored in the database
 
     } catch (error: any) {
-      console.error('Error generating cleanup report:', error);
+      logger.error('Error generating cleanup report:', error);
     }
   }
 
@@ -301,13 +298,13 @@ class CleanupService {
       
       // Check if cleanup is not stuck
       if (this.isRunning) {
-        console.warn('Cleanup service health check: cleanup is currently running');
+        logger.warn('Cleanup service health check: cleanup is currently running');
       }
 
       return isDbHealthy && !this.isRunning;
 
     } catch (error: any) {
-      console.error('Cleanup service health check failed:', error);
+      logger.error('Cleanup service health check failed:', error);
       return false;
     }
   }
@@ -316,14 +313,14 @@ class CleanupService {
    * Stop all cleanup processes (for graceful shutdown)
    */
   async stop(): Promise<void> {
-    console.log('Stopping cleanup service...');
+    logger.info('Stopping cleanup service...');
     
     // Wait for current cleanup to finish if running
     while (this.isRunning) {
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
-    console.log('Cleanup service stopped');
+    logger.info('Cleanup service stopped');
   }
 
   /**
@@ -341,7 +338,7 @@ class CleanupService {
    * Pre-fetches jobs for popular search queries to reduce live API calls
    */
   async runCacheWarmingJob(): Promise<void> {
-    console.log('Running scheduled job: Proactive Cache Warming...');
+    logger.info('Running scheduled job: Proactive Cache Warming...');
     
     // Popular search queries organized by priority (high-demand first)
     const popularSearches = [
@@ -404,12 +401,12 @@ class CleanupService {
 
     for (const query of sortedSearches) {
       try {
-        console.log(`Cache warming: Processing ${query.priority} priority query - ${query.what} in ${query.where}`);
+        logger.info(`Cache warming: Processing ${query.priority} priority query - ${query.what} in ${query.where}`);
         
         // Check if we already have recent results for this query to avoid unnecessary processing
         const searchKey = this.generateSearchKey(query);
         if (this.hasRecentCache(searchKey)) {
-          console.log(`Cache warming: Skipping ${query.what} in ${query.where} - already cached`);
+          logger.info(`Cache warming: Skipping ${query.what} in ${query.where} - already cached`);
           skippedCount++;
           continue;
         }
@@ -420,7 +417,7 @@ class CleanupService {
         if (success) {
           processedCount++;
         } else {
-          console.log(`Cache warming: No new jobs found for ${query.what} in ${query.where}`);
+          logger.info(`Cache warming: No new jobs found for ${query.what} in ${query.where}`);
         }
         
         // Variable delays based on priority - shorter delays for high-priority queries
@@ -429,14 +426,14 @@ class CleanupService {
         
       } catch (error: any) {
         errorCount++;
-        console.error(`Cache warming error for query ${query.what} in ${query.where}:`, error.message);
+        logger.error(`Cache warming error for query ${query.what} in ${query.where}:`, error.message);
         
         // Continue with next query even if one fails
         continue;
       }
     }
     
-    console.log(`Cache warming job completed. Processed: ${processedCount}, Skipped: ${skippedCount}, Errors: ${errorCount}`);
+    logger.info(`Cache warming job completed. Processed: ${processedCount}, Skipped: ${skippedCount}, Errors: ${errorCount}`);
   }
 
   /**

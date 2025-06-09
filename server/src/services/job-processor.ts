@@ -3,6 +3,7 @@ import { jobsIndex } from '../config/algolia';
 import { dbService } from './database';
 import { AIEnrichmentService } from './ai-enrichment';
 import { API_ENDPOINTS, appConfig } from '../config/app';
+import { logger } from '../utils/logger';
 import axios from 'axios';
 
 export class JobProcessorService {
@@ -14,31 +15,29 @@ export class JobProcessorService {
    * @param searchKey - Unique key for tracking this search request
    * @returns Promise<boolean> - Whether a job was successfully processed
    */  static async fetchAndProcessJob(queryParams: any, searchKey?: string): Promise<boolean> {
-    try {
-      // 1. Check if we recently processed similar jobs to avoid duplicates (Smart Deduplication)
+    try {      // 1. Check if we recently processed similar jobs to avoid duplicates (Smart Deduplication)
       const recentSimilarJobs = await JobProcessorService.checkForRecentSimilarJobs(queryParams);
       if (recentSimilarJobs && recentSimilarJobs.length >= 3) {
-        console.log(`Skipping job processing for search ${searchKey || 'unknown'} - found ${recentSimilarJobs.length} recent similar jobs`);
+        logger.info(`Skipping job processing for search ${searchKey || 'unknown'} - found ${recentSimilarJobs.length} recent similar jobs`);
         return true; // Consider this a success since we have recent data
       }
         // 2. Fetch real jobs from TheirStack API
       const theirStackJobs = await JobProcessorService.fetchJobsFromTheirStack(queryParams);
       
       if (!theirStackJobs || theirStackJobs.length === 0) {
-        console.log(`No jobs found from TheirStack for search ${searchKey || 'unknown'}`);
+        logger.info(`No jobs found from TheirStack for search ${searchKey || 'unknown'}`);
         return false;
       }
         // Process all jobs since we're only getting 3 to maximize API credit value
       const jobsToProcess = theirStackJobs; // Process all 3 jobs
       
       let successCount = 0;
-      
-      for (const rawJob of jobsToProcess) {
+        for (const rawJob of jobsToProcess) {
         try {
           // 3. Check if this specific job already exists
           const existingJob = await JobProcessorService.checkJobExists(rawJob);
           if (existingJob) {
-            console.log(`Skipping duplicate job: ${rawJob.job_title} at ${rawJob.company}`);
+            logger.info(`Skipping duplicate job: ${rawJob.job_title} at ${rawJob.company}`);
             continue;
           }
           
@@ -51,37 +50,33 @@ export class JobProcessorService {
           // 4. Save to Algolia, using the unique job ID as the objectID
           const objectToSave = { ...enrichedJob, objectID: enrichedJob.id, createdAt: Date.now() };
           await jobsIndex.saveObjects([objectToSave]);
-          
-          successCount++;
-          console.log(`Successfully indexed job ${enrichedJob.id} for search: ${searchKey || 'unknown'}`);
+            successCount++;
+          logger.info(`Successfully indexed job ${enrichedJob.id} for search: ${searchKey || 'unknown'}`);
           
           // Small delay between processing jobs
           await new Promise(resolve => setTimeout(resolve, 200));
           
         } catch (jobError) {
-          console.error(`Failed to process individual job:`, jobError);
+          logger.error(`Failed to process individual job:`, jobError);
         }
-      }
-
-      // Simulate realistic API processing time
+      }      // Simulate realistic API processing time
       await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
       
-      console.log(`Processed ${successCount}/${jobsToProcess.length} jobs for search: ${searchKey || 'unknown'}`);
+      logger.info(`Processed ${successCount}/${jobsToProcess.length} jobs for search: ${searchKey || 'unknown'}`);
       return successCount > 0;
       
     } catch (error) {
-      console.error(`Failed to process jobs for search ${searchKey || 'unknown'}:`, error);
+      logger.error(`Failed to process jobs for search ${searchKey || 'unknown'}:`, error);
       return false;
     }
   }  /**
    * Fetch real jobs from TheirStack API
    */
-  private static async fetchJobsFromTheirStack(queryParams: any): Promise<any[]> {
-    try {
+  private static async fetchJobsFromTheirStack(queryParams: any): Promise<any[]> {    try {
       if (!appConfig.theirStackApiKey) {
-        console.error('TheirStack API key not configured');
+        logger.error('TheirStack API key not configured');
         return [];
-      }      // Build TheirStack API filters based on API specification
+      }// Build TheirStack API filters based on API specification
       const filters: any = {
         posted_at_max_age_days: 30, // Required field - jobs posted within last 30 days
         page: 0,
@@ -95,21 +90,20 @@ export class JobProcessorService {
         if (searchTerm) {
           filters.job_title_pattern_or = [searchTerm]; // Must be an array
         }
-      }
-
-      // NOTE: location_name_or is not supported by TheirStack API
+      }      // NOTE: location_name_or is not supported by TheirStack API
       // Location filtering will be done post-processing
       if (queryParams.where) {
-        console.log(`Location filtering for "${queryParams.where}" will be applied post-processing`);
+        logger.info(`Location filtering for "${queryParams.where}" will be applied post-processing`);
       }
 
       // Add salary filters if provided (using correct parameter names)
       if (queryParams.salary_min) {
         filters.min_salary_usd = parseInt(queryParams.salary_min);
-      }
-      if (queryParams.salary_max) {
+      }      if (queryParams.salary_max) {
         filters.max_salary_usd = parseInt(queryParams.salary_max);
-      }console.log(`Fetching jobs from TheirStack API with filters:`, filters);
+      }
+
+      logger.info(`Fetching jobs from TheirStack API with filters:`, filters);
 
       const response = await axios.post(
         API_ENDPOINTS.THEIRSTACK_SEARCH,
@@ -123,28 +117,28 @@ export class JobProcessorService {
           validateStatus: (status) => status < 500 // Accept 4xx errors to handle them gracefully
         }
       );      if (response.status === 402) {
-        console.warn('TheirStack API: Payment required or quota exceeded - consider upgrading plan or implementing fallback');
+        logger.warn('TheirStack API: Payment required or quota exceeded - consider upgrading plan or implementing fallback');
         // TODO: Could implement fallback to alternative job source here
         return [];
       }
 
       if (response.status === 429) {
-        console.warn('TheirStack API: Rate limit reached - will retry later');
+        logger.warn('TheirStack API: Rate limit reached - will retry later');
         return [];
       }
 
       if (response.status === 422) {
-        console.error('TheirStack API: Invalid parameters:', response.data);
+        logger.error('TheirStack API: Invalid parameters:', response.data);
         return [];
       }
 
       if (response.status !== 200) {
-        console.error(`TheirStack API returned status ${response.status}:`, response.data);
+        logger.error(`TheirStack API returned status ${response.status}:`, response.data);
         return [];
       }      const result = response.data;
       let jobsList = Array.isArray(result.data) ? result.data : [];
 
-      console.log(`Retrieved ${jobsList.length} jobs from TheirStack API`);      // Apply location filtering post-processing since TheirStack doesn't support location_name_or
+      logger.info(`Retrieved ${jobsList.length} jobs from TheirStack API`);// Apply location filtering post-processing since TheirStack doesn't support location_name_or
       if (queryParams.where) {
         const locationFilter = queryParams.where.toLowerCase().trim();
         const originalCount = jobsList.length;
@@ -180,32 +174,29 @@ export class JobProcessorService {
             (filterPart === 'belfast' && (jobLocation.includes('belfast') || jobCity.includes('belfast')))
           );
         });
-          console.log(`Location filter "${queryParams.where}" reduced results from ${originalCount} to ${jobsList.length} jobs`);
+
+        logger.info(`Location filter "${queryParams.where}" reduced results from ${originalCount} to ${jobsList.length} jobs`);
         
         // Debug: Log some job locations if filtering removed everything
         if (jobsList.length === 0 && originalCount > 0) {
-          console.log('DEBUG: Sample job locations from original results:');
-          const originalJobs = Array.isArray(result.data) ? result.data : [];
-          const sampleJobs = originalJobs.slice(0, 3);
-          sampleJobs.forEach((job: any, index: number) => {
-            console.log(`  Job ${index + 1}: ${JSON.stringify({
+          logger.debug('Sample job locations from original results:', {
+            originalJobs: Array.isArray(result.data) ? result.data.slice(0, 3).map((job: any, index: number) => ({
+              jobIndex: index + 1,
               location: job.location,
               location_name: job.location_name,
               long_location: job.long_location,
               country: job.country,
               city: job.city,
               state: job.state
-            })}`);
+            })) : [],
+            filterTerm: locationFilter
           });
-          console.log(`  Filter was looking for: "${locationFilter}"`);
         }
       }
 
       // Transform TheirStack jobs to our internal format
-      return jobsList.map((job: any) => this.transformTheirStackJob(job));
-
-    } catch (error: any) {
-      console.error('Error fetching jobs from TheirStack:', error.response?.data || error.message);
+      return jobsList.map((job: any) => this.transformTheirStackJob(job));    } catch (error: any) {
+      logger.error('Error fetching jobs from TheirStack:', error.response?.data || error.message);
       return [];
     }
   }
@@ -290,15 +281,14 @@ export class JobProcessorService {
         filters: `createdAt > ${cutoffTime}`,
         hitsPerPage: 10
       });
-      
-      if (result.hits && result.hits.length > 0) {
-        console.log(`Found ${result.hits.length} recent similar jobs for query: ${searchQuery}`);
+        if (result.hits && result.hits.length > 0) {
+        logger.info(`Found ${result.hits.length} recent similar jobs for query: ${searchQuery}`);
         return result.hits;
       }
       
       return null;
     } catch (error) {
-      console.error('Error checking for recent similar jobs:', error);
+      logger.error('Error checking for recent similar jobs:', error);
       return null;
     }
   }
@@ -313,10 +303,9 @@ export class JobProcessorService {
         filters: `job_title:"${jobData.job_title}" AND company:"${jobData.company}"`,
         hitsPerPage: 1
       });
-      
-      return result.hits && result.hits.length > 0;
+        return result.hits && result.hits.length > 0;
     } catch (error) {
-      console.error('Error checking if job exists:', error);
+      logger.error('Error checking if job exists:', error);
       return false;
     }
   }

@@ -1,6 +1,7 @@
 // App configuration and constants
 import { config } from 'dotenv';
 import * as path from 'path';
+import { logger } from '../utils/logger';
 
 // Load environment variables from the server directory
 const envPath = path.join(__dirname, '..', '..', '.env');
@@ -67,9 +68,8 @@ export const appConfig: AppConfig = {
 export function validateConfig(): void {
   const requiredVars = ['THEIRSTACK_API_KEY', 'GEMINI_API_KEY'];
   const missing = requiredVars.filter(varName => !process.env[varName]);
-  
-  if (missing.length > 0) {
-    console.error(`Missing required environment variables: ${missing.join(', ')}`);
+    if (missing.length > 0) {
+    logger.error(`Missing required environment variables: ${missing.join(', ')}`);
     if (process.env.NODE_ENV === 'production') {
       process.exit(1);
     }

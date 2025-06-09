@@ -6,6 +6,7 @@ import pdf from 'pdf-parse';
 import { aiConfig } from '../config/ai';
 import { dbService } from './database';
 import { AuthenticatedRequest } from './auth';
+import { logger } from '../utils/logger';
 
 export interface ParsedResumeData {
   workExperience: any[];
@@ -136,12 +137,10 @@ class ResumeProcessingService {
       const parsedData = await this.parseResumeWithAI(fileContent);
       
       // Update database with parsed data
-      await dbService.updateResumeParsedData(resume.id, parsedData);
-
-      return parsedData;
+      await dbService.updateResumeParsedData(resume.id, parsedData);      return parsedData;
 
     } catch (error) {
-      console.error('Error parsing existing resume:', error);
+      logger.error('Error parsing existing resume:', error);
       throw new Error('Failed to parse resume');
     }
   }
@@ -164,10 +163,9 @@ class ResumeProcessingService {
         return pdfData.text;
       } else {
         // For text files
-        return await fs.readFile(filePath, 'utf-8');
-      }
+        return await fs.readFile(filePath, 'utf-8');      }
     } catch (error) {
-      console.error('File extraction error:', error);
+      logger.error('File extraction error:', error);
       throw new Error(`Failed to extract content from ${file.mimetype} file`);
     }
   }
@@ -221,10 +219,9 @@ class ResumeProcessingService {
       
       let parsedAnalysis: ParsedResumeData;
       try {
-        parsedAnalysis = JSON.parse(cleanedAnalysis);
-      } catch (parseError) {
-        console.error('Failed to parse AI response:', cleanedAnalysis);
-        console.error('Parse error:', parseError);
+        parsedAnalysis = JSON.parse(cleanedAnalysis);      } catch (parseError) {
+        logger.error('Failed to parse AI response:', cleanedAnalysis);
+        logger.error('Parse error:', parseError);
         
         // Try to extract JSON from the response
         const jsonMatch = cleanedAnalysis.match(/\{[\s\S]*\}/);
@@ -240,16 +237,14 @@ class ResumeProcessingService {
       }      // Validate required fields
       this.validateAndSanitizeParsedData(parsedAnalysis);
 
-      return parsedAnalysis;
-
-    } catch (error) {
-      console.error('AI parsing error:', error);
+      return parsedAnalysis;    } catch (error) {
+      logger.error('AI parsing error:', error);
       
       // Fallback to basic parsing strategy
       const fallbackData = this.createFallbackResumeData(content);
-      console.warn('Falling back to basic resume parsing strategy');
+      logger.warn('Falling back to basic resume parsing strategy');
       return fallbackData;
-    }  }
+    }}
 
   /**
    * Clean JSON response by removing comments and fixing common issues
@@ -380,13 +375,12 @@ class ResumeProcessingService {
 
   /**
    * Clean up uploaded file
-   */
-  private async cleanupFile(filePath: string): Promise<void> {
+   */  private async cleanupFile(filePath: string): Promise<void> {
     try {
       await fs.unlink(filePath);
-      console.log(`Cleaned up file: ${filePath}`);
+      logger.info(`Cleaned up file: ${filePath}`);
     } catch (error) {
-      console.warn(`Failed to cleanup file ${filePath}:`, error);
+      logger.warn(`Failed to cleanup file ${filePath}:`, error);
     }
   }
 
@@ -410,9 +404,8 @@ class ResumeProcessingService {
 
   /**
    * Create fallback resume data when AI parsing fails
-   */
-  private createFallbackResumeData(rawText: string): ParsedResumeData {
-    console.warn('Creating fallback resume data due to AI parsing failure');
+   */  private createFallbackResumeData(rawText: string): ParsedResumeData {
+    logger.warn('Creating fallback resume data due to AI parsing failure');
     
     // Basic text analysis for fallback
     const text = rawText.toLowerCase();
@@ -432,8 +425,7 @@ class ResumeProcessingService {
         missing: ['leadership', 'teamwork', 'communication', 'problem-solving']
       }
     };
-  }
-  /**
+  }  /**
    * Enhanced validation that also sanitizes data
    */
   private validateAndSanitizeParsedData(data: any): void {
@@ -445,7 +437,7 @@ class ResumeProcessingService {
     // Ensure all required fields exist and are arrays/objects as expected
     for (const field of requiredFields) {
       if (!(field in data)) {
-        console.warn(`Missing field ${field}, adding default`);
+        logger.warn(`Missing field ${field}, adding default`);
         if (['workExperience', 'skills', 'education', 'projects', 'certifications', 'strengths', 'improvements'].includes(field)) {
           data[field] = [];
         } else if (field === 'summary') {
@@ -459,13 +451,13 @@ class ResumeProcessingService {
     // Sanitize arrays
     ['workExperience', 'skills', 'education', 'projects', 'certifications', 'strengths', 'improvements'].forEach(field => {
       if (!Array.isArray(data[field])) {
-        console.warn(`Field ${field} is not an array, converting`);
+        logger.warn(`Field ${field} is not an array, converting`);
         data[field] = [];
       }
       
       // Limit array sizes to prevent excessive data
       if (data[field].length > 20) {
-        console.warn(`Field ${field} has ${data[field].length} items, truncating to 20`);
+        logger.warn(`Field ${field} has ${data[field].length} items, truncating to 20`);
         data[field] = data[field].slice(0, 20);
       }
     });

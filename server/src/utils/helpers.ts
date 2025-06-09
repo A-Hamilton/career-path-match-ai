@@ -1,4 +1,6 @@
 // Helper utilities
+import { logger } from './logger';
+
 export const delay = (ms: number): Promise<void> => 
   new Promise(resolve => setTimeout(resolve, ms));
 
@@ -44,9 +46,8 @@ export function parseJsonSafely(jsonString: string): any | null {
   try {
     // Remove markdown code fences if present
     const cleaned = jsonString.replace(/```json|```/g, '').trim();
-    return JSON.parse(cleaned);
-  } catch (error) {
-    console.error('JSON parsing failed:', error);
+    return JSON.parse(cleaned);  } catch (error) {
+    logger.error('JSON parsing failed:', error);
     return null;
   }
 }

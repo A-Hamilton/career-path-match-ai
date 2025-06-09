@@ -2,6 +2,7 @@ import { algoliaJobs } from '../config/algolia';
 import { JobProcessorService } from './job-processor';
 import { queryCache } from './cache';
 import { cacheAnalytics } from './cache-analytics';
+import { logger } from '../utils/logger';
 
 export interface JobSearchResponse {
   data: any[];
@@ -118,7 +119,7 @@ class JobSearchService {
       // Check the query cache first (Layer 1 optimization)
     const cachedResult = queryCache.get(searchKey);
     if (cachedResult) {
-      console.log(`Returning cached response for search key: ${searchKey}`);
+      logger.info(`Returning cached response for search key: ${searchKey}`);
       cacheAnalytics.recordCacheHit(searchKey);
       return cachedResult;
     }
@@ -141,7 +142,7 @@ class JobSearchService {
     const page = Math.max(0, Number(queryParams.page) || 0);
     const limit = Math.min(10, Math.max(1, Number(queryParams.limit) || 3));    try {
       // 1. Search Algolia first
-      console.log(`Searching Algolia for: "${searchQuery}" with filters: "${algoliaFilters}" (page: ${page}, limit: ${limit})`);
+      logger.info(`Searching Algolia for: "${searchQuery}" with filters: "${algoliaFilters}" (page: ${page}, limit: ${limit})`);
       
       const startTime = Date.now();
       const algoliaResult = await algoliaJobs.search(searchQuery, {
@@ -152,7 +153,7 @@ class JobSearchService {
       const duration = Date.now() - startTime;
       
       cacheAnalytics.recordAlgoliaQuery(searchKey, duration);
-      console.log(`Algolia search result: ${algoliaResult.hits.length} hits found (total: ${algoliaResult.nbHits})`);
+      logger.info(`Algolia search result: ${algoliaResult.hits.length} hits found (total: ${algoliaResult.nbHits})`);
       
       if (algoliaResult.hits && algoliaResult.hits.length > 0) {
         // Clear negative cache since we found results
@@ -177,11 +178,11 @@ class JobSearchService {
         return result;
       } else {
         // No hits: Check smart processing logic
-        console.log(`No Algolia hits for search key: ${searchKey}`);
+        logger.info(`No Algolia hits for search key: ${searchKey}`);
         return this.handleNoResults(searchKey, queryParams);
       }
     } catch (error) {
-      console.error('Error searching jobs:', error);
+      logger.error('Error searching jobs:', error);
       // On error, still apply smart processing logic
       return this.handleNoResults(searchKey, queryParams);
     }
@@ -234,7 +235,7 @@ class JobSearchService {
           RequestTracker.cacheEmptyResult(searchKey);
         }
       } catch (error) {
-        console.error('Async job processing failed:', error);
+        logger.error('Async job processing failed:', error);
         RequestTracker.finishProcessing(searchKey, false);
         RequestTracker.cacheEmptyResult(searchKey);
       }

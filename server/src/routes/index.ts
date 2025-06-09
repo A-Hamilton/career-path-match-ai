@@ -4,6 +4,7 @@ import jobsRouter from './jobs';
 import uploadRouter from './upload';
 import { AIEnrichmentService } from '../services/ai-enrichment';
 import { dbService } from '../services/database';
+import { logger } from '../utils/logger';
 
 const router = Router();
 
@@ -42,16 +43,15 @@ router.get('/api/salary-estimate', async (req, res) => {
           id: id as string,
           min_annual_salary_usd: salaryData.min,
           max_annual_salary_usd: salaryData.max
-        });
-      } catch (error) {
-        console.warn('Could not upsert job salary in database:', error);
+        });      } catch (error) {
+        logger.warn('Could not upsert job salary in database:', error);
       }
     }
 
     return res.json({ range });
 
   } catch (error) {
-    console.error('Error in salary-estimate endpoint:', error);
+    logger.error('Error in salary-estimate endpoint:', error);
     res.status(500).json({ error: 'Failed to estimate salary' });
   }
 });

@@ -1,4 +1,6 @@
 // Cache Analytics Service - Track cache effectiveness to optimize API usage
+import { logger } from '../utils/logger';
+
 interface CacheMetrics {
   hits: number;
   misses: number;
@@ -33,7 +35,7 @@ class CacheAnalyticsService {
     this.metrics.hits++;
     this.updateCacheEfficiency();
     this.addEvent('hit', searchKey);
-    console.log(`[CACHE] Hit for key: ${searchKey.substring(0, 50)}...`);
+    logger.info(`[CACHE] Hit for key: ${searchKey.substring(0, 50)}...`);
   }
 
   /**
@@ -43,7 +45,7 @@ class CacheAnalyticsService {
     this.metrics.misses++;
     this.updateCacheEfficiency();
     this.addEvent('miss', searchKey);
-    console.log(`[CACHE] Miss for key: ${searchKey.substring(0, 50)}...`);
+    logger.info(`[CACHE] Miss for key: ${searchKey.substring(0, 50)}...`);
   }
 
   /**
@@ -52,7 +54,7 @@ class CacheAnalyticsService {
   recordAlgoliaQuery(searchKey: string, duration?: number): void {
     this.metrics.algoliaQueries++;
     this.addEvent('algolia', searchKey, duration);
-    console.log(`[ALGOLIA] Query for key: ${searchKey.substring(0, 50)}... (${duration || 'N/A'}ms)`);
+    logger.info(`[ALGOLIA] Query for key: ${searchKey.substring(0, 50)}... (${duration || 'N/A'}ms)`);
   }
 
   /**
@@ -61,7 +63,7 @@ class CacheAnalyticsService {
   recordJobProcessing(searchKey: string, duration?: number): void {
     this.metrics.jobProcessingCalls++;
     this.addEvent('processing', searchKey, duration);
-    console.log(`[PROCESSING] Job processing for key: ${searchKey.substring(0, 50)}... (${duration || 'N/A'}ms)`);
+    logger.info(`[PROCESSING] Job processing for key: ${searchKey.substring(0, 50)}... (${duration || 'N/A'}ms)`);
   }
 
   /**
@@ -103,7 +105,7 @@ class CacheAnalyticsService {
       cacheEfficiency: 0
     };
     this.events = [];
-    console.log('[CACHE ANALYTICS] Metrics reset');
+    logger.info('[CACHE ANALYTICS] Metrics reset');
   }
   /**
    * Get hourly cache statistics

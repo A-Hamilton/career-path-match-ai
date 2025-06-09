@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { db } from '../config/database';
+import { logger } from '../utils/logger';
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -18,13 +19,10 @@ export class AuthService {
 class AuthMiddleware {
   /**
    * Verify Firebase ID token middleware
-   */
-  async verifyToken(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+   */  async verifyToken(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
     const authHeader = req.headers.authorization;
-    console.log("Authorization Header:", authHeader);
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      console.log("No valid Authorization Header found.");
       res.status(401).json({ 
         error: 'Unauthorized', 
         message: 'Missing or invalid Authorization header' 
@@ -33,13 +31,12 @@ class AuthMiddleware {
     }
 
     const idToken = authHeader.split('Bearer ')[1];
-    console.log("Extracted ID Token:", idToken ? "Present" : "Missing");    try {
+
+    try {
       const decoded = await db.getAuth().verifyIdToken(idToken);
       req.user = decoded;
-      console.log("Token Verified Successfully for user:", decoded.uid);
       next();
     } catch (err: any) {
-      console.error("Token Verification Failed:", err.code || err.message);
       res.status(401).json({ 
         error: 'Unauthorized', 
         message: err.message || 'Invalid token',
@@ -58,14 +55,12 @@ class AuthMiddleware {
       // No auth provided, continue without user
       next();
       return;
-    }
-
-    const idToken = authHeader.split('Bearer ')[1];    try {
+    }    const idToken = authHeader.split('Bearer ')[1];    try {
       const decoded = await db.getAuth().verifyIdToken(idToken);
       req.user = decoded;
-      console.log("Optional auth verified for user:", decoded.uid);
+      logger.debug("Optional auth verified for user:", decoded.uid);
     } catch (err: any) {
-      console.warn("Optional auth failed:", err.code || err.message);
+      logger.warn("Optional auth failed:", err.code || err.message);
       // Continue without user rather than failing
     }
 
@@ -97,10 +92,10 @@ class AuthMiddleware {
           return;
         }
 
-        console.log(`Role check passed for user ${req.user.uid} with role ${userRole}`);
+        logger.info(`Role check passed for user ${req.user.uid} with role ${userRole}`);
         next();
       } catch (err: any) {
-        console.error("Role verification failed:", err);
+        logger.error("Role verification failed:", err);
         res.status(500).json({ 
           error: 'Internal Server Error', 
           message: 'Failed to verify user role' 
@@ -197,10 +192,8 @@ class AuthMiddleware {
 
         // Attach resource data to request for use in handler
         (req as any).resource = { id: doc.id, ...data };
-        next();
-
-      } catch (err: any) {
-        console.error("Resource ownership validation failed:", err);
+        next();      } catch (err: any) {
+        logger.error("Resource ownership validation failed:", err);
         res.status(500).json({ 
           error: 'Internal Server Error', 
           message: 'Failed to validate resource ownership' 
@@ -223,10 +216,9 @@ class AuthMiddleware {
     const idToken = authHeader.split('Bearer ')[1];    try {
       // Decode without verification for basic user info
       const decoded = await db.getAuth().verifyIdToken(idToken, false);
-      req.user = { uid: decoded.uid, email: decoded.email };
-    } catch (err) {
+      req.user = { uid: decoded.uid, email: decoded.email };    } catch (err) {
       // Ignore errors in extraction mode
-      console.debug("User info extraction failed:", err);
+      logger.debug("User info extraction failed:", err);
     }
 
     next();
@@ -234,11 +226,10 @@ class AuthMiddleware {
 
   /**
    * Clean up expired rate limit entries
-   */
-  cleanupRateLimits(): void {
+   */  cleanupRateLimits(): void {
     // This would be called periodically to clean up the rate limit maps
     // Implementation depends on the specific rate limiting strategy used
-    console.log("Rate limit cleanup executed");
+    logger.info("Rate limit cleanup executed");
   }
 }
 

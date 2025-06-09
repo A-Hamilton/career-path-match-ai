@@ -3,12 +3,12 @@ import { useEffect } from "react";
 
 const NotFound = () => {
   const location = useLocation();
-
   useEffect(() => {
-    console.error(
-      "404 Error: User attempted to access non-existent route:",
-      location.pathname
-    );
+    // Log 404 errors to analytics service in production
+    if (process.env.NODE_ENV === 'production') {
+      // TODO: Replace with proper analytics logging
+      // analytics.track('404_error', { path: location.pathname });
+    }
   }, [location.pathname]);
 
   return (

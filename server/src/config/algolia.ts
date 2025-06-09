@@ -1,13 +1,19 @@
 // server/src/config/algolia.ts
 // Algolia v5 API syntax for Node.js/TypeScript
 import { algoliasearch } from 'algoliasearch';
+import { config } from 'dotenv';
+import path from 'path';
 
-const ALGOLIA_APP_ID = '6UL41X0H49';
-const ALGOLIA_ADMIN_KEY = 'a6e12942c3b5cab1a2b8a88f69dc7a83';
-const INDEX_NAME = 'jobs_index';
+// Load environment variables
+const envPath = path.join(__dirname, '..', '..', '.env');
+config({ path: envPath });
+
+const ALGOLIA_APP_ID = process.env.ALGOLIA_APP_ID;
+const ALGOLIA_ADMIN_KEY = process.env.ALGOLIA_ADMIN_KEY;
+const INDEX_NAME = process.env.ALGOLIA_INDEX_NAME || 'jobs_index';
 
 if (!ALGOLIA_APP_ID || !ALGOLIA_ADMIN_KEY) {
-  throw new Error('Algolia credentials are not configured.');
+  throw new Error('Algolia credentials are not configured. Please set ALGOLIA_APP_ID and ALGOLIA_ADMIN_KEY environment variables.');
 }
 
 // Initialize Algolia client with v5 syntax
