@@ -15,91 +15,48 @@ export class JobProcessorService {
    * @param queryParams - The search parameters
    * @param searchKey - Unique key for tracking this search request
    * @returns Promise<boolean> - Whether a job was successfully processed
-   */
-  static async fetchAndProcessJob(queryParams: any, searchKey?: string): Promise<boolean> {
-    try {
-      // 1. Check if we recently processed similar jobs to avoid duplicates (Smart Deduplication)
+   */  static async fetchAndProcessJob(queryParams: any, searchKey?: string): Promise<boolean> {
+    try {      // 1. Check if we recently processed similar jobs to avoid duplicates (Smart Deduplication)
       const recentSimilarJobs = await JobProcessorService.checkForRecentSimilarJobs(queryParams);
       if (recentSimilarJobs && recentSimilarJobs.length >= 3) {
         logger.info(`Skipping job processing for search ${searchKey || 'unknown'} - found ${recentSimilarJobs.length} recent similar jobs`);
         return true; // Consider this a success since we have recent data
+      }        // 2. Fetch real jobs from TheirStack API
+      const theirStackJobs = await JobProcessorService.fetchJobsFromTheirStack(queryParams, searchKey);
+      
+      if (!theirStackJobs || theirStackJobs.length === 0) {
+        logger.info(`No jobs found from TheirStack for search ${searchKey || 'unknown'}`);
+        return false;
       }
 
-      // 2. Continuous fetching strategy - try multiple times to find location-relevant jobs
-      const maxRetries = 5; // Maximum number of API calls to try
-      let totalJobsSaved = 0;
-      let locationRelevantJobsFound = 0;
+      // 3. PHASE 1: Process and save ALL jobs to database for data building
+      const savedJobs = await JobProcessorService.saveAllJobsToDatabase(theirStackJobs, searchKey);
       
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        logger.info(`Attempt ${attempt}/${maxRetries} to fetch jobs for search ${searchKey || 'unknown'}`);
-        
-        // Fetch jobs from TheirStack API
-        const theirStackJobs = await JobProcessorService.fetchJobsFromTheirStack(queryParams, searchKey, attempt - 1);
-        
-        if (!theirStackJobs || theirStackJobs.length === 0) {
-          logger.info(`No jobs found from TheirStack on attempt ${attempt}`);
-          break; // No more jobs available
-        }
-
-        // Save ALL jobs to database for data building
-        const savedJobs = await JobProcessorService.saveAllJobsToDatabase(theirStackJobs, searchKey);
-        totalJobsSaved += savedJobs.length;
-        
-        // Check how many are relevant for this location search
-        const relevantJobs = JobProcessorService.filterJobsForLocation(savedJobs, queryParams.where);
-        locationRelevantJobsFound += relevantJobs.length;
-        
-        logger.info(`Attempt ${attempt}: Saved ${savedJobs.length} jobs, ${relevantJobs.length} location-relevant. Total: ${totalJobsSaved} saved, ${locationRelevantJobsFound} relevant.`);
-        
-        // Success criteria: either found location-relevant jobs OR saved substantial data
-        if (relevantJobs.length > 0) {
-          logger.info(`Success! Found ${locationRelevantJobsFound} location-relevant jobs for "${queryParams.where || 'any'}" after ${attempt} attempts`);
-          return true;
-        }
-        
-        // If we've saved enough jobs to database, consider it successful even without location matches
-        if (totalJobsSaved >= 10) {
-          logger.info(`Saved ${totalJobsSaved} jobs to database across ${attempt} attempts. Good for data building.`);
-          return true;
-        }
-        
-        // Add delay between attempts to be respectful to the API
-        if (attempt < maxRetries) {
-          logger.info(`Waiting 3 seconds before next attempt...`);
-          await new Promise(resolve => setTimeout(resolve, 3000));
-        }
-      }
+      // 4. PHASE 2: Filter saved jobs for search relevance
+      const relevantJobs = JobProcessorService.filterJobsForLocation(savedJobs, queryParams.where);
       
-      // Final assessment
-      if (totalJobsSaved > 0) {
-        logger.info(`Completed processing: saved ${totalJobsSaved} jobs, ${locationRelevantJobsFound} location-relevant for "${queryParams.where || 'any'}"`);
-        return true; // We got some data, which is valuable
-      }
+      logger.info(`Saved ${savedJobs.length} jobs to database, ${relevantJobs.length} are relevant for location "${queryParams.where || 'any'}"`);
       
-      logger.info(`No jobs found after ${maxRetries} attempts for search ${searchKey || 'unknown'}`);
-      return false;
+      // If we found relevant jobs for this search, consider it successful
+      // If not, we still saved data to the database which is valuable for future searches
+      return relevantJobs.length > 0 || savedJobs.length > 0;
       
     } catch (error) {
       logger.error(`Failed to process jobs for search ${searchKey || 'unknown'}:`, error);
       return false;
     }
-  }
-
-  /**
+  }  /**
    * Fetch real jobs from TheirStack API
    */
-  private static async fetchJobsFromTheirStack(queryParams: any, searchKey?: string, pageOffset: number = 0): Promise<any[]> {
-    try {
+  private static async fetchJobsFromTheirStack(queryParams: any, searchKey?: string): Promise<any[]> {try {
       if (!appConfig.theirStackApiKey) {
         logger.error('TheirStack API key not configured');
         return [];
-      }
-
-      // Build TheirStack API filters based on API specification
+      }      // Build TheirStack API filters based on API specification
       const filters: any = {
         posted_at_max_age_days: 30, // Required field - jobs posted within last 30 days
-        page: pageOffset, // Use page offset for pagination
-        limit: 5 // Get 5 jobs per request to conserve API credits but get some variety
+        page: 0,
+        limit: 1 // Only get 1 job to conserve API credits and process one at a time
       };
 
       // Add search criteria using correct parameter names from API docs
@@ -109,19 +66,22 @@ export class JobProcessorService {
         if (searchTerm) {
           filters.job_title_pattern_or = [searchTerm]; // Must be an array
         }
-      }
-
-      // Check if this is an unlikely location combination that should be skipped
-      if (queryParams.where && this.shouldSkipLocationSearch(queryParams.where, queryParams.what)) {
-        logger.info(`Skipping TheirStack API call for unlikely location combination: "${queryParams.where}"`);
-        return [];
+      }      // NOTE: location_name_or is not supported by TheirStack API
+      // Location filtering will be done post-processing
+      if (queryParams.where) {
+        logger.info(`Location filtering for "${queryParams.where}" will be applied post-processing`);
+        
+        // Check if this is an unlikely location combination that should be skipped
+        if (this.shouldSkipLocationSearch(queryParams.where, queryParams.what)) {
+          logger.info(`Skipping TheirStack API call for unlikely location combination: "${queryParams.where}"`);
+          return [];
+        }
       }
 
       // Add salary filters if provided (using correct parameter names)
       if (queryParams.salary_min) {
         filters.min_salary_usd = parseInt(queryParams.salary_min);
-      }
-      if (queryParams.salary_max) {
+      }      if (queryParams.salary_max) {
         filters.max_salary_usd = parseInt(queryParams.salary_max);
       }
 
@@ -138,10 +98,9 @@ export class JobProcessorService {
           timeout: 15000, // Increased timeout
           validateStatus: (status) => status < 500 // Accept 4xx errors to handle them gracefully
         }
-      );
-
-      if (response.status === 402) {
+      );      if (response.status === 402) {
         logger.warn('TheirStack API: Payment required or quota exceeded - consider upgrading plan or implementing fallback');
+        // TODO: Could implement fallback to alternative job source here
         return [];
       }
 
@@ -158,15 +117,13 @@ export class JobProcessorService {
       if (response.status !== 200) {
         logger.error(`TheirStack API returned status ${response.status}:`, response.data);
         return [];
-      }
-
-      const result = response.data;
+      }      const result = response.data;
       let jobsList = Array.isArray(result.data) ? result.data : [];
 
-      logger.info(`Retrieved ${jobsList.length} jobs from TheirStack API (page ${pageOffset})`);
+      logger.info(`Retrieved ${jobsList.length} jobs from TheirStack API`);
       
       // Debug: Log the structure of the first job to understand the data format
-      if (jobsList.length > 0 && pageOffset === 0) {
+      if (jobsList.length > 0) {
         logger.debug('Sample TheirStack job structure:', {
           keys: Object.keys(jobsList[0]),
           sampleData: {
@@ -181,20 +138,107 @@ export class JobProcessorService {
             description: jobsList[0].description?.substring(0, 100) + '...'
           }
         });
-      }
+      }// Apply location filtering post-processing since TheirStack doesn't support location_name_or
+      if (queryParams.where) {
+        const locationFilter = queryParams.where.toLowerCase().trim();
+        const originalCount = jobsList.length;
+        
+        // More flexible location matching
+        const matchingJobs = jobsList.filter((job: any) => {
+          // Handle special cases first
+          if (locationFilter === 'remote' && job.remote) {
+            return true;
+          }
+          
+          // Get all possible location fields
+          const jobLocation = (job.location?.name || job.location_name || job.location || '').toLowerCase();
+          const jobLongLocation = (job.location?.full_name || job.long_location || '').toLowerCase();
+          const jobCountry = (job.location?.country || job.country || '').toLowerCase();
+          const jobCity = (job.location?.city || job.city || '').toLowerCase();
+          const jobState = (job.location?.state || job.state || '').toLowerCase();
+          
+          // Split location filter into parts for flexible matching
+          const filterParts: string[] = locationFilter.split(/[\s,]+/).filter((part: string) => part.length > 0);
+          
+          // Check if any filter part matches any location field
+          return filterParts.some(filterPart => 
+            jobLocation.includes(filterPart) || 
+            jobLongLocation.includes(filterPart) ||
+            jobCountry.includes(filterPart) ||
+            jobCity.includes(filterPart) ||
+            jobState.includes(filterPart) ||
+            // Also check for common location abbreviations
+            (filterPart === 'ny' && (jobLocation.includes('new york') || jobState.includes('new york'))) ||
+            (filterPart === 'nyc' && jobLocation.includes('new york')) ||
+            (filterPart === 'sf' && (jobLocation.includes('san francisco') || jobCity.includes('san francisco'))) ||
+            (filterPart === 'belfast' && (jobLocation.includes('belfast') || jobCity.includes('belfast')))
+          );
+        });        // STRATEGY: Save ALL jobs to database for data building, then filter for location relevance
+        
+        // Step 1: Save ALL jobs to database (regardless of location match)
+        logger.info(`Processing all ${originalCount} jobs for database building`);
+        const allSanitizedJobs = await AISanitizationService.batchSanitizeJobs(jobsList);
+        
+        // Save all jobs to database to build our job data
+        for (const job of allSanitizedJobs) {
+          try {
+            // Check if job already exists by URL to avoid duplicates
+            const existsByUrl = await JobProcessorService.checkJobExistsByUrl(job.url || '');
+            if (existsByUrl) {
+              logger.info(`Skipping duplicate job by URL: ${job.url}`);
+              continue;
+            }
 
-      // Transform TheirStack jobs using AI sanitization
+            // Save to Firestore
+            await dbService.upsertJob(job);
+
+            // Save to Algolia
+            const objectToSave = { ...job, objectID: job.id, createdAt: Date.now() };
+            await jobsIndex.saveObjects([objectToSave]);
+            
+            logger.info(`Successfully indexed job ${job.id} for search: ${searchKey || 'unknown'}`);
+            
+          } catch (saveError) {
+            logger.error(`Failed to save job ${job.id}:`, saveError);
+          }
+        }
+        
+        // Step 2: Filter for location-relevant jobs for this specific search
+        const locationRelevantJobs = matchingJobs.length > 0 ? matchingJobs : [];
+        
+        if (locationRelevantJobs.length === 0 && originalCount > 0) {
+          logger.info(`No location matches for "${queryParams.where}" found in this batch. Saved ${allSanitizedJobs.length} jobs to database.`);
+          // Return empty array - we'll try another batch
+          jobsList = [];
+        } else {
+          logger.info(`Location filter "${queryParams.where}" found ${locationRelevantJobs.length} relevant jobs out of ${originalCount} total`);
+          jobsList = locationRelevantJobs;
+        }
+        
+        // Debug: Log some job locations if filtering removed everything
+        if (matchingJobs.length === 0 && originalCount > 0) {
+          logger.debug('Sample job locations from original results:', {
+            originalJobs: Array.isArray(result.data) ? result.data.slice(0, 3).map((job: any, index: number) => ({
+              jobIndex: index + 1,
+              location: job.location,
+              location_name: job.location_name,
+              long_location: job.long_location,
+              country: job.country,
+              city: job.city,
+              state: job.state
+            })) : [],
+            filterTerm: locationFilter,
+            strategy: 'saved_to_database_continue_searching'
+          });
+        }
+      }// Transform TheirStack jobs using AI sanitization instead of manual transformation
       const sanitizedJobs = await AISanitizationService.batchSanitizeJobs(jobsList);
       
-      return sanitizedJobs;
-
-    } catch (error: any) {
+      return sanitizedJobs;} catch (error: any) {
       logger.error('Error fetching jobs from TheirStack:', error.response?.data || error.message);
       return [];
     }
-  }
-
-  /**
+  }  /**
    * Check for recent similar jobs to prevent redundant processing (Smart Deduplication)
    */
   private static async checkForRecentSimilarJobs(queryParams: any): Promise<any[] | null> {
@@ -211,8 +255,7 @@ export class JobProcessorService {
         filters: `createdAt > ${cutoffTime}`,
         hitsPerPage: 10
       });
-
-      if (result.hits && result.hits.length > 0) {
+        if (result.hits && result.hits.length > 0) {
         logger.info(`Found ${result.hits.length} recent similar jobs for query: ${searchQuery}`);
         return result.hits;
       }
@@ -223,7 +266,6 @@ export class JobProcessorService {
       return null;
     }
   }
-
   /**
    * Check if a specific job already exists to prevent exact duplicates
    */
@@ -234,13 +276,11 @@ export class JobProcessorService {
         filters: `job_title:"${jobData.job_title}" AND company:"${jobData.company}"`,
         hitsPerPage: 1
       });
-
-      return result.hits && result.hits.length > 0;
+        return result.hits && result.hits.length > 0;
     } catch (error) {
       logger.error('Error checking if job exists:', error);
       return false;
-    }
-  }
+    }  }
 
   /**
    * PHASE 1: Save all jobs to database regardless of location match
@@ -249,10 +289,10 @@ export class JobProcessorService {
   private static async saveAllJobsToDatabase(theirStackJobs: any[], searchKey?: string): Promise<any[]> {
     const savedJobs: any[] = [];
     
-    for (const job of theirStackJobs) {
+    for (const rawJob of theirStackJobs) {
       try {
         // Check if this specific job already exists (by URL for better accuracy)
-        const jobUrl = job.url || job.final_url || '';
+        const jobUrl = rawJob.url || rawJob.final_url || '';
         const existsByUrl = await JobProcessorService.checkJobExistsByUrl(jobUrl);
         
         if (existsByUrl) {
@@ -261,29 +301,24 @@ export class JobProcessorService {
         }
 
         // Fallback check by title and company
-        const existsByTitleCompany = await JobProcessorService.checkJobExists(job);
+        const existsByTitleCompany = await JobProcessorService.checkJobExists(rawJob);
         if (existsByTitleCompany) {
-          logger.info(`Skipping duplicate job: ${job.job_title} at ${job.company}`);
+          logger.info(`Skipping duplicate job: ${rawJob.job_title} at ${rawJob.company}`);
           continue;
         }
         
-        // No need to re-sanitize as it's already done in fetchJobsFromTheirStack
-        // But we can enrich with additional AI processing if needed
-        let processedJob = job;
-
-        // Optionally add additional AI enrichment here
-        // const [enrichedJob] = await AIEnrichmentService.enrichJobs([job]);
-        // processedJob = enrichedJob;
+        // Enrich with Gemini AI
+        const [enrichedJob] = await AIEnrichmentService.enrichJobs([rawJob]);
 
         // Save to Firestore
-        await dbService.upsertJob(processedJob);
+        await dbService.upsertJob(enrichedJob);
 
         // Save to Algolia, using the unique job ID as the objectID
-        const objectToSave = { ...processedJob, objectID: processedJob.id, createdAt: Date.now() };
+        const objectToSave = { ...enrichedJob, objectID: enrichedJob.id, createdAt: Date.now() };
         await jobsIndex.saveObjects([objectToSave]);
           
-        savedJobs.push(processedJob);
-        logger.info(`Successfully saved job ${processedJob.id} (${processedJob.job_title} at ${processedJob.company}) for search: ${searchKey || 'unknown'}`);
+        savedJobs.push(enrichedJob);
+        logger.info(`Successfully saved job ${enrichedJob.id} (${enrichedJob.job_title} at ${enrichedJob.company}) for search: ${searchKey || 'unknown'}`);
         
         // Small delay between processing jobs to avoid overwhelming the APIs
         await new Promise(resolve => setTimeout(resolve, 200));
@@ -354,14 +389,12 @@ export class JobProcessorService {
         filters: `url:"${jobUrl}" OR final_url:"${jobUrl}"`,
         hitsPerPage: 1
       });
-
-      return result.hits && result.hits.length > 0;
+        return result.hits && result.hits.length > 0;
     } catch (error) {
       logger.error('Error checking if job exists by URL:', error);
       return false;
     }
   }
-
   /**
    * Determine if a location search is unlikely to yield results and should be skipped
    * This helps save API credits by avoiding searches for locations that TheirStack
@@ -396,8 +429,7 @@ export class JobProcessorService {
         return false;
       }
     }
-
-    // TheirStack primarily serves global tech markets, but still try major cities
+      // TheirStack primarily serves global tech markets, but still try major cities
     const majorTechCities = [
       'london', 'dublin', 'edinburgh', 'manchester', 'birmingham', 'glasgow', 'belfast',
       'toronto', 'vancouver', 'montreal', 'ottawa',

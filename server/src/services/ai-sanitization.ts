@@ -52,17 +52,62 @@ export class AISanitizationService {
       const model = aiService.getGenAIClient().getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
       const result = await model.generateContent(prompt);
       const response = await result.response;
+        const rawText = response.text()?.trim() || '';
       
-      const rawText = response.text()?.trim() || '';
-      const cleanedText = this.cleanJSONResponse(rawText);
-      
-      const sanitizedJob = JSON.parse(cleanedText) as Job;
-      
-      // Validate the sanitized job conforms to our interface
-      this.validateJobData(sanitizedJob);
-      
-      logger.debug(`Successfully sanitized job: ${sanitizedJob.job_title} at ${sanitizedJob.company}`);
-      return sanitizedJob;
+      // Clean the response multiple times to ensure proper JSON formatting
+      let cleanedText = this.cleanJSONResponse(rawText);
+        try {
+        const sanitizedJob = JSON.parse(cleanedText) as Job;
+        
+        // Validate the sanitized job conforms to our interface
+        this.validateJobData(sanitizedJob);
+        
+        logger.debug(`Successfully sanitized job: ${sanitizedJob.job_title} at ${sanitizedJob.company}`);
+        return sanitizedJob;
+        
+      } catch (parseError: any) {
+        // If first attempt fails, try additional cleaning
+        logger.warn(`First JSON parse attempt failed: ${parseError.message}. Trying additional cleaning...`);
+        
+        // Additional aggressive cleaning
+        cleanedText = cleanedText
+          .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ') // Remove all control characters
+          .replace(/[""]/g, '"') // Normalize quotes
+          .replace(/['']/g, "'") // Normalize apostrophes
+          .replace(/\s+/g, ' ') // Normalize whitespace
+          .replace(/\\n/g, ' ') // Replace escaped newlines
+          .replace(/\\r/g, ' ') // Replace escaped carriage returns
+          .replace(/\\t/g, ' ') // Replace escaped tabs
+          .trim();
+        
+        try {
+          const sanitizedJob = JSON.parse(cleanedText) as Job;
+          this.validateJobData(sanitizedJob);
+          logger.debug(`Successfully sanitized job after additional cleaning: ${sanitizedJob.job_title} at ${sanitizedJob.company}`);
+          return sanitizedJob;
+        } catch (secondParseError: any) {
+          // Try one more time with manual string replacement for common issues
+          logger.warn(`Second JSON parse attempt failed: ${secondParseError.message}. Trying manual fixes...`);
+          
+          let manuallyFixed = cleanedText;
+          
+          // Fix common problematic patterns
+          manuallyFixed = manuallyFixed
+            .replace(/([^\\])\\([^\\"])/g, '$1\\\\$2') // Fix unescaped backslashes
+            .replace(/\\"([^"]*?)\\"/g, '"$1"') // Fix over-escaped quotes
+            .replace(/:\s*"([^"]*?)[\x00-\x1F]([^"]*?)"/g, ': "$1 $2"') // Fix control chars in values
+            .replace(/,(\s*[}\]])/g, '$1'); // Remove trailing commas
+          
+          try {
+            const sanitizedJob = JSON.parse(manuallyFixed) as Job;
+            this.validateJobData(sanitizedJob);
+            logger.debug(`Successfully sanitized job after manual fixes: ${sanitizedJob.job_title} at ${sanitizedJob.company}`);
+            return sanitizedJob;
+          } catch (finalParseError: any) {
+            throw new Error(`JSON parsing failed after all attempts: ${finalParseError.message}`);
+          }
+        }
+      }
       
     } catch (error: any) {
       logger.error('Job sanitization failed:', error);
@@ -119,17 +164,25 @@ REQUIRED OUTPUT INTERFACE:
 }
 
 CRITICAL REQUIREMENTS:
-- Return ONLY a single, valid, minified JSON object
+- Return ONLY a single, valid, minified JSON object with NO line breaks inside string values
 - No code fences, explanations, or additional text
 - All fields must match the exact types specified
 - Use null for missing numeric values, not undefined or empty strings
 - Boolean fields must be true or false, not strings
 - Arrays must be actual arrays, not strings
+- NO control characters (\\n, \\r, \\t, etc.) in string values - replace ALL with single spaces
+- Escape all quotes and backslashes properly in JSON strings
+- Remove all HTML tags and replace with plain text
+- Replace any line breaks in descriptions with single spaces
+- Ensure company names are extracted from the data structure properly
+- Keep all string values on single lines without any breaks
+- Clean and normalize all text content to prevent JSON parsing errors
+
+EXAMPLE OUTPUT FORMAT (single line, no breaks):
+{"id":"theirstack_123","job_title":"Software Engineer","company":"Tech Corp","location":"New York","long_location":"New York, NY, USA","description":"Great opportunity at tech company","short_description":"Software engineering role","date_posted":"2025-06-09T22:00:00.000Z","min_annual_salary_usd":80000,"max_annual_salary_usd":120000,"country":"United States","industry":"Technology","tags":["javascript","react"],"employment_statuses":["full-time"],"url":"https://example.com","final_url":"https://example.com","remote":false,"source":"theirstack"}
 
 RESPOND WITH VALID JSON ONLY:`;
-  }
-
-  /**
+  }  /**
    * Clean and parse JSON response from AI
    */
   private static cleanJSONResponse(rawText: string): string {
@@ -139,6 +192,26 @@ RESPOND WITH VALID JSON ONLY:`;
     cleaned = cleaned.replace(/```json|```/g, '');
     cleaned = cleaned.replace(/\/\*.*?\*\//gs, '');
     cleaned = cleaned.replace(/\/\/.*$/gm, '');
+    
+    // More aggressive control character removal - remove ALL control chars except space
+    cleaned = cleaned.replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]/g, ' ');
+    
+    // Remove unicode characters that can cause issues
+    cleaned = cleaned.replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200D\uFEFF]/g, ' ');
+    
+    // Fix common JSON formatting issues
+    cleaned = cleaned.replace(/\n/g, ' '); // Replace newlines with spaces
+    cleaned = cleaned.replace(/\r/g, ' '); // Replace carriage returns with spaces
+    cleaned = cleaned.replace(/\t/g, ' '); // Replace tabs with spaces
+    
+    // Fix escaped characters that could be problematic
+    cleaned = cleaned.replace(/\\\\n/g, ' '); // Remove escaped newlines
+    cleaned = cleaned.replace(/\\\\r/g, ' '); // Remove escaped carriage returns
+    cleaned = cleaned.replace(/\\\\t/g, ' '); // Remove escaped tabs
+    cleaned = cleaned.replace(/\\\\/g, '\\'); // Fix double backslashes
+    
+    // Remove multiple spaces
+    cleaned = cleaned.replace(/\s+/g, ' ');
     
     // Remove trailing commas
     cleaned = cleaned.replace(/,\s*([}\]])/g, '$1');
@@ -206,9 +279,7 @@ RESPOND WITH VALID JSON ONLY:`;
     }
 
     logger.debug(`Job data validation passed for: ${job.id}`);
-  }
-
-  /**
+  }  /**
    * Fallback manual transformation if AI sanitization fails
    * This preserves the existing logic as a safety net
    */
@@ -216,30 +287,197 @@ RESPOND WITH VALID JSON ONLY:`;
     const timestamp = Date.now();
     
     logger.warn(`Using fallback transformation for job: ${theirStackJob.title || theirStackJob.job_title || 'Unknown'}`);
+      // Debug: Log the raw job structure to understand the data format
+    logger.debug('Raw TheirStack job data structure:', {
+      keys: Object.keys(theirStackJob),
+      company: theirStackJob.company,
+      company_name: theirStackJob.company_name,
+      location: theirStackJob.location,
+      location_name: theirStackJob.location_name,
+      long_location: theirStackJob.long_location
+    });
+    
+    // Extract company name from various possible fields with improved logic
+    let companyName = 'Unknown Company';
+    
+    logger.debug('Company extraction - checking fields:', {
+      'theirStackJob.company': theirStackJob.company,
+      'typeof theirStackJob.company': typeof theirStackJob.company,
+      'theirStackJob.company_name': theirStackJob.company_name,
+      'theirStackJob.company_object': theirStackJob.company_object
+    });
+    
+    // First check if company field exists and is a string (TheirStack format)
+    if (theirStackJob.company && typeof theirStackJob.company === 'string') {
+      companyName = theirStackJob.company.trim();
+      logger.debug(`Extracted company from 'company' field: ${companyName}`);
+    }
+    // Check company object structure
+    else if (theirStackJob.company?.name) {
+      companyName = theirStackJob.company.name.trim();
+      logger.debug(`Extracted company from 'company.name' field: ${companyName}`);
+    } 
+    // Check company_name field
+    else if (theirStackJob.company_name) {
+      companyName = theirStackJob.company_name.trim();
+      logger.debug(`Extracted company from 'company_name' field: ${companyName}`);
+    } 
+    // Check company_object structure
+    else if (theirStackJob.company_object?.name) {
+      companyName = theirStackJob.company_object.name.trim();
+      logger.debug(`Extracted company from 'company_object.name' field: ${companyName}`);
+    } 
+    // Check employer fields
+    else if (theirStackJob.employer?.name) {
+      companyName = theirStackJob.employer.name.trim();
+      logger.debug(`Extracted company from 'employer.name' field: ${companyName}`);
+    } 
+    else if (theirStackJob.employer && typeof theirStackJob.employer === 'string') {
+      companyName = theirStackJob.employer.trim();
+      logger.debug(`Extracted company from 'employer' field: ${companyName}`);
+    } else {
+      // Try to extract company from description or URL
+      const description = theirStackJob.description || '';
+      const url = theirStackJob.url || theirStackJob.apply_url || '';
+      
+      // Look for company patterns in description
+      const companyPatterns = [
+        /\*\*([^*]+)\*\*\s*\*\*([^*]+)\*\*/,  // **Company** **Position**
+        /at\s+([A-Z][a-zA-Z\s&.-]+)/,         // "at Company Name"
+        /^([A-Z][a-zA-Z\s&.-]+)\s*-/          // "Company Name -"
+      ];
+      
+      for (const pattern of companyPatterns) {
+        const match = description.match(pattern);
+        if (match && match[1] && match[1].trim().length > 2) {
+          companyName = match[1].trim();
+          break;
+        }
+      }
+        
+      // Try to extract from LinkedIn URL
+      if (companyName === 'Unknown Company' && url.includes('linkedin.com')) {
+        const linkedinMatch = url.match(/at-([^-]+)-/);
+        if (linkedinMatch) {
+          companyName = linkedinMatch[1].replace(/-/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase());
+        }
+      }
+    }        // Extract location from various possible fields with improved logic
+    let location = 'Unknown Location';
+    let longLocation = 'Unknown Location';
+    let country = 'Unknown';
+    
+    if (theirStackJob.location && typeof theirStackJob.location === 'string') {
+      location = theirStackJob.location.trim();
+      longLocation = theirStackJob.long_location?.trim() || theirStackJob.location.trim();
+      country = theirStackJob.country?.trim() || 'Unknown';
+      logger.debug(`Extracted location from 'location' field: ${location}`);
+    } else if (theirStackJob.short_location) {
+      location = theirStackJob.short_location.trim();
+      longLocation = theirStackJob.long_location?.trim() || theirStackJob.short_location.trim();
+      country = theirStackJob.country?.trim() || 'Unknown';
+      logger.debug(`Extracted location from 'short_location' field: ${location}`);
+    } else if (theirStackJob.location?.name) {
+      location = theirStackJob.location.name.trim();
+      longLocation = theirStackJob.location.full_name?.trim() || theirStackJob.location.name.trim();
+      country = theirStackJob.location.country?.trim() || 'Unknown';
+      logger.debug(`Extracted location from 'location.name' field: ${location}`);
+    } else if (theirStackJob.location_name) {
+      location = theirStackJob.location_name.trim();
+      longLocation = theirStackJob.long_location?.trim() || theirStackJob.location_name.trim();
+      logger.debug(`Extracted location from 'location_name' field: ${location}`);
+    } else if (theirStackJob.long_location) {
+      location = theirStackJob.long_location.trim();
+      longLocation = theirStackJob.long_location.trim();
+      logger.debug(`Extracted location from 'long_location' field: ${location}`);
+    } else {
+      // Try to extract location from description
+      const description = theirStackJob.description || '';
+      
+      // Look for location patterns in description
+      const locationPatterns = [
+        /\*\*Location\*\*\s*([A-Z][a-zA-Z\s,-]+)/i,  // **Location** LocationName
+        /Location[:\s]+([A-Z][a-zA-Z\s,-]+)/i,        // Location: LocationName
+        /\*\*([A-Z][a-zA-Z\s,-]+)\*\*[^*]*-[^*]*([A-Z][a-zA-Z\s,-]+)/,  // **Company** - Location
+        /([A-Z][a-zA-Z]+),\s*([A-Z][a-zA-Z]+)/       // City, State
+      ];
+      
+      for (const pattern of locationPatterns) {
+        const match = description.match(pattern);
+        if (match && match[1] && match[1].trim().length > 2) {
+          const extractedLocation = match[1].trim();
+          if (!extractedLocation.toLowerCase().includes('job') && 
+              !extractedLocation.toLowerCase().includes('title') &&
+              !extractedLocation.toLowerCase().includes('details')) {
+            location = extractedLocation;
+            longLocation = extractedLocation;
+            break;
+          }
+        }
+      }
+    }
+      // Try to extract country if not already set
+    if (country === 'Unknown' && theirStackJob.country) {
+      country = theirStackJob.country;
+    }
+    
+    // Extract industry from company object or description with improved logic
+    let industry = 'Technology';
+    if (theirStackJob.company_object?.industry) {
+      industry = theirStackJob.company_object.industry;
+    } else if (theirStackJob.company?.industry) {
+      industry = theirStackJob.company.industry;
+    } else if (theirStackJob.industry) {
+      industry = theirStackJob.industry;
+    } else {
+      // Try to infer industry from job title, description, and company name
+      const jobTitle = (theirStackJob.job_title || theirStackJob.title || '').toLowerCase();
+      const description = (theirStackJob.description || '').toLowerCase();
+      const company = (companyName || '').toLowerCase();
+      
+      if (jobTitle.includes('teacher') || jobTitle.includes('education') || description.includes('school') || description.includes('teacher') || company.includes('school')) {
+        industry = 'Education';
+      } else if (jobTitle.includes('marketing') || jobTitle.includes('sales') || jobTitle.includes('specialist') && description.includes('marketing')) {
+        industry = 'Marketing & Sales';
+      } else if (jobTitle.includes('healthcare') || jobTitle.includes('medical') || jobTitle.includes('nurse') || company.includes('health')) {
+        industry = 'Healthcare';
+      } else if (jobTitle.includes('finance') || jobTitle.includes('accounting') || jobTitle.includes('financial')) {
+        industry = 'Finance';
+      } else if (jobTitle.includes('sap') || jobTitle.includes('basis') || description.includes('sap')) {
+        industry = 'Enterprise Software';
+      } else if (jobTitle.includes('software') || jobTitle.includes('developer') || jobTitle.includes('engineer')) {
+        industry = 'Technology';
+      }    }
+    
+    // Clean up descriptions
+    let jobDescription = theirStackJob.description || theirStackJob.summary || 'No description available';
+    let jobShortDescription = jobDescription.substring(0, 200);
+    
+    // Remove HTML tags from description
+    jobDescription = jobDescription.replace(/<[^>]*>/g, '');
+    jobShortDescription = jobShortDescription.replace(/<[^>]*>/g, '');
     
     return {
       id: fallbackId || `theirstack_${theirStackJob.id || timestamp}_${Math.random().toString(36).substr(2, 9)}`,
-      job_title: theirStackJob.title || theirStackJob.job_title || 'Unknown Position',
-      company: theirStackJob.company?.name || theirStackJob.company_name || 'Unknown Company',
-      location: theirStackJob.location?.name || theirStackJob.location_name || 'Unknown Location',
-      long_location: theirStackJob.location?.full_name || theirStackJob.location_name || 'Unknown Location',
-      description: theirStackJob.description || theirStackJob.summary || 'No description available',
-      short_description: (theirStackJob.summary || theirStackJob.description || theirStackJob.title || 'Job opportunity').substring(0, 200),
-      date_posted: theirStackJob.posted_at || theirStackJob.created_at || new Date().toISOString(),
+      job_title: theirStackJob.job_title || theirStackJob.title || 'Unknown Position',
+      company: companyName,
+      location: location,
+      long_location: longLocation,
+      description: jobDescription,
+      short_description: jobShortDescription,
+      date_posted: theirStackJob.date_posted || theirStackJob.posted_at || theirStackJob.created_at || new Date().toISOString(),
       remote: theirStackJob.remote || false,
       min_annual_salary_usd: theirStackJob.min_annual_salary_usd || null,
       max_annual_salary_usd: theirStackJob.max_annual_salary_usd || null,
-      country: theirStackJob.location?.country || theirStackJob.country || 'Unknown',
-      industry: theirStackJob.company?.industry || theirStackJob.industry || 'Technology',
+      country: country,
+      industry: industry,
       tags: this.extractTagsFallback(theirStackJob),
-      employment_statuses: theirStackJob.employment_type ? [theirStackJob.employment_type] : ['full-time'],
-      url: theirStackJob.apply_url || theirStackJob.url || `https://theirstack.com/jobs/${theirStackJob.id}`,
-      final_url: theirStackJob.apply_url || theirStackJob.url || `https://theirstack.com/jobs/${theirStackJob.id}`,
+      employment_statuses: theirStackJob.employment_statuses || (theirStackJob.employment_type ? [theirStackJob.employment_type] : ['full-time']),
+      url: theirStackJob.url || theirStackJob.apply_url || `https://theirstack.com/jobs/${theirStackJob.id}`,
+      final_url: theirStackJob.final_url || theirStackJob.url || theirStackJob.apply_url || `https://theirstack.com/jobs/${theirStackJob.id}`,
       source: 'theirstack'
     };
-  }
-
-  /**
+  }  /**
    * Extract tags fallback method
    */
   private static extractTagsFallback(job: any): string[] {
@@ -251,6 +489,26 @@ RESPOND WITH VALID JSON ONLY:`;
         typeof skill === 'string' ? skill.toLowerCase() : skill.name?.toLowerCase()
       ).filter(Boolean));
     }
+
+    // Extract tags from job title
+    const jobTitle = (job.title || job.job_title || '').toLowerCase();
+    const description = (job.description || '').toLowerCase();
+    
+    const skillTags = [
+      'senior', 'junior', 'lead', 'principal', 'staff', 'manager', 'director',
+      'react', 'vue', 'angular', 'javascript', 'typescript', 'python', 'java',
+      'node', 'nodejs', 'frontend', 'backend', 'fullstack', 'full-stack',
+      'devops', 'sap', 'basis', 'marketing', 'specialist', 'analyst',
+      'teacher', 'biology', 'science', 'education', 'healthcare', 'medical',
+      'aws', 'azure', 'gcp', 'kubernetes', 'docker', 'ci/cd', 'agile', 'scrum',
+      'sql', 'mongodb', 'postgresql', 'mysql', 'redis', 'elasticsearch'
+    ];
+    
+    skillTags.forEach(tag => {
+      if (jobTitle.includes(tag) || description.includes(tag)) {
+        tags.push(tag);
+      }
+    });
 
     // Add job level/seniority
     if (job.seniority_level) {
@@ -275,21 +533,36 @@ RESPOND WITH VALID JSON ONLY:`;
 
   /**
    * Batch sanitize multiple jobs with rate limiting
-   */
-  public static async batchSanitizeJobs(rawJobs: any[]): Promise<Job[]> {
-    if (!rawJobs.length) return [];
+   */  public static async batchSanitizeJobs(rawJobs: any[]): Promise<Job[]> {
+    if (!rawJobs.length) {
+      logger.info(`No jobs to sanitize - rawJobs array is empty`);
+      return [];
+    }
 
-    logger.info(`Starting batch sanitization of ${rawJobs.length} jobs`);
+    logger.info(`[AI SANITIZATION] Starting batch sanitization of ${rawJobs.length} jobs`);
+    
+    // Log sample of raw job data for debugging
+    logger.debug(`[AI SANITIZATION] Sample raw job data:`, {
+      sampleJob: rawJobs[0] ? {
+        id: rawJobs[0].id,
+        title: rawJobs[0].title || rawJobs[0].job_title,
+        company: rawJobs[0].company?.name || rawJobs[0].company_name,
+        location: rawJobs[0].location
+      } : 'No jobs available'
+    });
     
     const sanitizedJobs: Job[] = [];
     
     for (let i = 0; i < rawJobs.length; i++) {
       try {
         const fallbackId = `theirstack_${rawJobs[i].id || Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        logger.info(`[AI SANITIZATION] Processing job ${i + 1}/${rawJobs.length}: ${rawJobs[i].title || rawJobs[i].job_title || 'Unknown'}`);
+        
         const sanitizedJob = await this.sanitizeJobData(rawJobs[i], fallbackId);
         sanitizedJobs.push(sanitizedJob);
         
-        logger.debug(`Sanitized job ${i + 1}/${rawJobs.length}: ${sanitizedJob.job_title}`);
+        logger.info(`[AI SANITIZATION] ✅ Successfully sanitized job ${i + 1}: "${sanitizedJob.job_title}" at ${sanitizedJob.company}`);
         
         // Add delay between jobs except for the last one
         if (i < rawJobs.length - 1) {
@@ -297,12 +570,12 @@ RESPOND WITH VALID JSON ONLY:`;
         }
         
       } catch (error) {
-        logger.error(`Failed to sanitize job ${i + 1}:`, error);
+        logger.error(`[AI SANITIZATION] ❌ Failed to sanitize job ${i + 1}:`, error);
         // Continue with other jobs even if one fails
       }
     }
     
-    logger.info(`Completed batch sanitization: ${sanitizedJobs.length}/${rawJobs.length} jobs processed successfully`);
+    logger.info(`[AI SANITIZATION] Completed batch sanitization: ${sanitizedJobs.length}/${rawJobs.length} jobs processed successfully`);
     return sanitizedJobs;
   }
 }
