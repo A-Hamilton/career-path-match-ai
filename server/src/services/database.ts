@@ -1,5 +1,7 @@
+import { Query, DocumentData, FieldValue } from '@google-cloud/firestore';
 import { db } from '../config/database';
-import { FieldValue, Query, CollectionReference, DocumentData } from 'firebase-admin/firestore';
+import { logger } from '../utils/logger';
+import { validateJobLocation } from '../utils/location-validator';
 
 export interface Job {
   id: string;
@@ -63,57 +65,144 @@ class DatabaseService {
     salaryMax?: number;
     location?: string;
     jobTitle?: string;
-    offset?: number;
-    limit?: number;
+    offset?: number; // Starting index for results
+    limit?: number;  // Number of items per page
+    remote?: boolean; // Add remote filter
   }): Promise<Job[]> {
-    // TODO: For advanced search, consider integrating Algolia or MeiliSearch for full-text and typo-tolerant search.
     try {
       let query: Query<DocumentData> = db.getFirestore().collection(this.jobsCollection);
 
-      // Apply Firestore-supported filters only (date, salary)
+      // Apply Firestore-supported filters (date, single-bound salary)
       if (filters.cutoffDate) {
         query = query.where('date_posted', '>=', filters.cutoffDate);
       }
-      if (filters.salaryMin && !filters.salaryMax) {
+      // These are handled by Firestore only if it's a single-bound filter.
+      // If both salaryMin and salaryMax are present, it's handled by in-memory filtering later.
+      if (filters.salaryMin != null && filters.salaryMax == null) {
         query = query.where('min_annual_salary_usd', '>=', filters.salaryMin);
-      } else if (filters.salaryMax && !filters.salaryMin) {
+      } else if (filters.salaryMax != null && filters.salaryMin == null) {
         query = query.where('max_annual_salary_usd', '<=', filters.salaryMax);
       }
-      // Order by date for consistent pagination
+      
+      // Order by date for consistent results
       query = query.orderBy('date_posted', 'desc');
-      if (filters.offset) {
-        query = query.offset(filters.offset);
+
+      const needsInMemoryFiltering = !!(filters.jobTitle || filters.location || (filters.salaryMin != null && filters.salaryMax != null));
+      let jobs: Job[];
+      const DEFAULT_PAGE_LIMIT = 10;
+
+      if (needsInMemoryFiltering) {
+        // Fetch a larger set for in-memory filtering.
+        // This limit should be high enough to get enough candidates for several pages after filtering.
+        // Consider making this configurable or dynamically adjusting if performance issues arise.
+        const preliminaryLimit = 1000; 
+        const snapshot = await query.limit(preliminaryLimit).get();
+        jobs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Job));
+        console.log(`[DB] Raw jobs fetched for in-memory filtering: ${jobs.length}`);
+
+        // In-memory filtering for jobTitle
+        if (filters.jobTitle) {
+          const search = filters.jobTitle.trim().toLowerCase();
+          jobs = jobs.filter(job => (job.job_title || '').toLowerCase().includes(search));
+        }
+
+        // In-memory filtering for location
+        if (filters.location) {
+          const loc = filters.location.trim().toLowerCase();
+          jobs = jobs.filter(job => {
+            const location = (job.location || '').toLowerCase();
+            const longLocation = (job.long_location || '').toLowerCase();
+            const city = ((job as any).city || '').toLowerCase();
+            const country = (job.country || '').toLowerCase();
+            
+            if (location === loc || city === loc) return true;
+            if (location.startsWith(loc + ',') || longLocation.startsWith(loc + ',')) return true;
+            const commaPattern = new RegExp(`(^|,\\s*)${loc.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\\\$&')}(\\s*,|$)`, 'i');
+            if (commaPattern.test(location) || commaPattern.test(longLocation)) return true;
+            if (loc.length > 2 && country === loc) return true; // Basic country match
+            return false;
+          });
+        }
+        
+        // In-memory filtering for salary range (if both min and max are specified)
+        if (filters.salaryMin != null && filters.salaryMax != null) {
+          jobs = jobs.filter(job => {
+            const minSalary = job.min_annual_salary_usd;
+            const maxSalary = job.max_annual_salary_usd;
+            if (minSalary === undefined && maxSalary === undefined) return false;
+            if (minSalary !== undefined && maxSalary === undefined) {
+              return minSalary >= filters.salaryMin! && minSalary <= filters.salaryMax!;
+            }
+            if (maxSalary !== undefined && minSalary === undefined) {
+              return maxSalary >= filters.salaryMin! && maxSalary <= filters.salaryMax!;
+            }
+            if (minSalary !== undefined && maxSalary !== undefined) {
+              return minSalary <= filters.salaryMax! && maxSalary >= filters.salaryMin!;
+            }
+            return false;
+          });
+        }
+
+        // Validate location data for filtered jobs
+        try {
+          const { validateJobLocation } = require('../utils/location-validator');
+          jobs = jobs.map(job => validateJobLocation(job));
+        } catch (error) {
+          console.warn('Failed to validate job locations during in-memory filtering:', error);
+        }
+
+        // Deduplicate jobs by ID (prevents duplicates after in-memory filtering)
+        const seenIds = new Set();
+        jobs = jobs.filter(job => {
+          if (seenIds.has(job.id)) return false;
+          seenIds.add(job.id);
+          return true;
+        });
+
+        // In-memory filtering for remote/on-site status if filter is provided
+        if (filters.remote !== undefined) {
+          jobs = jobs.filter(job => job.remote === filters.remote);
+        }
+
+        // Normalize remote property for all jobs (ensure boolean or false)
+        jobs = jobs.map(job => ({ ...job, remote: !!job.remote }));
+
+        console.log(`[DB] Jobs after all in-memory filters and deduplication: ${jobs.length}`);
+
+        // Apply pagination to the in-memory filtered results
+        const startIndex = filters.offset || 0;
+        const effectiveLimit = filters.limit || DEFAULT_PAGE_LIMIT;
+        jobs = jobs.slice(startIndex, startIndex + effectiveLimit);
+
+      } else {
+        // No complex in-memory filtering needed. Firestore can handle pagination.
+        if (filters.offset) {
+          query = query.offset(filters.offset);
+        }
+        const effectiveLimit = filters.limit || DEFAULT_PAGE_LIMIT;
+        query = query.limit(effectiveLimit);
+        
+        const snapshot = await query.get();
+        jobs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Job));
+        console.log(`[DB] Jobs fetched directly from Firestore with pagination: ${jobs.length}`);
+        
+        // Validate location data
+        try {
+          const { validateJobLocation } = require('../utils/location-validator');
+          jobs = jobs.map(job => validateJobLocation(job));
+        } catch (error) {
+          console.warn('Failed to validate job locations for Firestore-paginated results:', error);
+        }
       }
-      if (filters.limit) {
-        query = query.limit(filters.limit * 3 || 15); // get extra for in-memory filtering
-      }
-      const snapshot = await query.get();
-      let jobs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Job));
-      console.log(`[DB] Raw jobs fetched: ${jobs.length}`);
-      // In-memory filtering for jobTitle and location (case-insensitive, partial match)
-      if (filters.jobTitle) {
-        const search = filters.jobTitle.trim().toLowerCase();
-        jobs = jobs.filter(job => (job.job_title || '').toLowerCase().includes(search));
-      }
-      if (filters.location) {
-        const loc = filters.location.trim().toLowerCase();
-        jobs = jobs.filter(job =>
-          (job.location || '').toLowerCase().includes(loc) ||
-          (job.long_location || '').toLowerCase().includes(loc)
-        );
-      }
-      // Final limit
-      if (filters.limit) {
-        jobs = jobs.slice(0, filters.limit);
-      }
-      console.log(`[DB] Jobs after in-memory filter: ${jobs.length}`);
+      
+      console.log(`[DB] Jobs returned after pagination stage: ${jobs.length}`);
       return jobs;
+
     } catch (error) {
       console.error('Error getting jobs with filters:', error);
       throw new Error(`Failed to fetch filtered jobs: ${error}`);
     }
   }
-
   /**
    * Count jobs matching advanced filters (without pagination)
    */
@@ -123,30 +212,104 @@ class DatabaseService {
     salaryMax?: number;
     location?: string;
     jobTitle?: string;
+    remote?: boolean; // Add remote filter for count
   }): Promise<number> {
     try {
       let query = db.getFirestore().collection(this.jobsCollection) as Query<DocumentData>;
+
       if (filters.cutoffDate) {
         query = query.where('date_posted', '>=', filters.cutoffDate);
       }
+
+      // Apply Firestore query for single-bound salary filters
       if (filters.salaryMin != null && filters.salaryMax == null) {
-        query = query.where('min_annual_salary_usd', '>=', filters.salaryMin!);
+        query = query.where('min_annual_salary_usd', '>=', filters.salaryMin);
       } else if (filters.salaryMax != null && filters.salaryMin == null) {
-        query = query.where('max_annual_salary_usd', '<=', filters.salaryMax!);
+        query = query.where('max_annual_salary_usd', '<=', filters.salaryMax);
       }
-      if (filters.jobTitle) {
-        const title = filters.jobTitle.toLowerCase();
-        // cannot index partial, skip title filter for count
+      // If both salaryMin and salaryMax are present, or if jobTitle/location filters are present,
+      // we will need to do in-memory filtering.
+
+      // Check if in-memory filtering is needed for jobTitle, location, or a salary range
+      if (filters.jobTitle || filters.location || (filters.salaryMin != null && filters.salaryMax != null)) {
+        // Fetch up to 1000 documents that match the base criteria for in-memory filtering.
+        const limitedQuery = query.limit(1000);
+        const snapshot = await limitedQuery.get();
+        
+        let jobs = snapshot.docs.map(doc => validateJobLocation({ id: doc.id, ...doc.data() } as any as Job));
+
+        // In-memory filter for salary range if both min and max are specified
+        if (filters.salaryMin != null && filters.salaryMax != null) {
+            jobs = jobs.filter(job => {
+                const minSalary = job.min_annual_salary_usd;
+                const maxSalary = job.max_annual_salary_usd;
+
+                if (minSalary === undefined && maxSalary === undefined) return false;
+
+                if (minSalary !== undefined && maxSalary === undefined) { // Job has only min_salary
+                    return minSalary >= filters.salaryMin! && minSalary <= filters.salaryMax!;
+                }
+                if (maxSalary !== undefined && minSalary === undefined) { // Job has only max_salary
+                    return maxSalary >= filters.salaryMin! && maxSalary <= filters.salaryMax!;
+                }
+                if (minSalary !== undefined && maxSalary !== undefined) { // Job has a salary range
+                    return minSalary <= filters.salaryMax! && maxSalary >= filters.salaryMin!; // Check for overlap
+                }
+                return false;
+            });
+        }
+
+        if (filters.jobTitle) {
+          const search = filters.jobTitle.trim().toLowerCase();
+          jobs = jobs.filter(job => (job.job_title || '').toLowerCase().includes(search));
+        }
+        
+        if (filters.location) {
+          const loc = filters.location.trim().toLowerCase();
+          const isBelfastSearch = loc === 'belfast';
+
+          jobs = jobs.filter(job => {
+            const jobLocation = (job.location || '').toLowerCase();
+            const jobLongLocation = (job.long_location || '').toLowerCase();
+            const jobCity = ((job as any).city || '').toLowerCase(); 
+            const jobCountry = (job.country || '').toLowerCase();
+
+            const cityRegex = new RegExp(`\\b${loc}\\b`, 'i');
+            const commonSeparatorsRegex = new RegExp(`(?:\\s*,\\s*|\\s*\\/\\s*|^)${loc}(?:\\s*,\\s*|\\s*\\/\\s*|$)`, 'i');
+            
+            if (isBelfastSearch) {
+              if ((jobLocation.includes('belfast') && jobLocation.includes('northern ireland')) ||
+                  (jobLongLocation.includes('belfast') && jobLongLocation.includes('northern ireland'))) {
+                return true;
+              }
+              return cityRegex.test(jobLocation) || cityRegex.test(jobLongLocation) || cityRegex.test(jobCity);
+            }
+
+            return commonSeparatorsRegex.test(jobLocation) ||
+                   commonSeparatorsRegex.test(jobLongLocation) ||
+                   cityRegex.test(jobCity) || 
+                   loc === jobCountry;
+          });
+        }
+
+        // In-memory filtering for remote/on-site status if filter is provided
+        if (filters.remote !== undefined) {
+          jobs = jobs.filter(job => job.remote === filters.remote);
+        }
+
+        // Normalize remote property for all jobs (ensure boolean or false)
+        jobs = jobs.map(job => ({ ...job, remote: !!job.remote }));
+
+        return jobs.length;
       }
-      if (filters.location) {
-        // location filter not supported in Firestore, skip for count
-      }
-      // Use Firestore count aggregation
-      const snapshot = await (query.count().get());
-      return snapshot.data().count || 0;
+
+      // If no complex filters requiring in-memory processing, use Firestore's native count.
+      const countSnapshot = await query.count().get();
+      return countSnapshot.data().count || 0;
+
     } catch (error) {
-      console.error('Error counting jobs with filters:', error);
-      return 0;
+      logger.error('Error counting jobs with filters:', error);
+      throw error;
     }
   }
 

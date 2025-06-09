@@ -104,7 +104,14 @@ const JobSearch = () => {  const [searchTerm, setSearchTerm] = useState("");
         })
       );
       
-      setJobs(prev => append ? [...prev, ...jobsWithEstimate] : jobsWithEstimate);
+      setJobs(prev => {
+        if (append) {
+          const existingJobIds = new Set(prev.map(job => job.id));
+          const newUniqueJobs = jobsWithEstimate.filter(job => !existingJobIds.has(job.id));
+          return [...prev, ...newUniqueJobs];
+        }
+        return jobsWithEstimate;
+      });
       setPage(pageNum);
       
     } catch (err: any) {
@@ -333,14 +340,21 @@ const JobSearch = () => {  const [searchTerm, setSearchTerm] = useState("");
                           <div className="flex items-center">
                             <Briefcase className="h-4 w-4 mr-1" />
                             <span>{job.employment_statuses?.[0] || "N/A"}</span>
-                          </div>
-                          <div className="flex items-center">
+                          </div>                          <div className="flex items-center group relative">
                             <DollarSign className="h-4 w-4 mr-1" />
                             <span>
                               {job.min_annual_salary_usd || job.max_annual_salary_usd
                                 ? `${job.min_annual_salary_usd ? `$${job.min_annual_salary_usd.toLocaleString()}` : ''}${job.max_annual_salary_usd ? ` - $${job.max_annual_salary_usd.toLocaleString()}` : ''}`
                                 : job.salary_estimate || 'N/A'}
                             </span>
+                            {job.min_annual_salary_usd === 50000 && job.max_annual_salary_usd === 75000 && (
+                              <span className="ml-1 cursor-help text-xs text-gray-500 underline decoration-dotted" title="This is an estimated salary range for this position">
+                                (est.)
+                                <div className="absolute bottom-full left-0 mb-2 w-48 bg-gray-800 text-white text-xs rounded py-1 px-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  Estimated industry average salary range
+                                </div>
+                              </span>
+                            )}
                           </div>
                           <div className="flex items-center">
                             <Clock className="h-4 w-4 mr-1" />
@@ -405,17 +419,16 @@ const JobSearch = () => {  const [searchTerm, setSearchTerm] = useState("");
                       </div>
                     </div>
                   )}
-                </Button>
-                <div className="text-sm text-gray-500 space-y-1">
-                  <p>Showing {jobs.length} of {totalResults} jobs</p>
+                </Button>                <div className="text-sm text-gray-500 space-y-1">
+                  <p>Showing {jobs.length} {jobs.length === totalResults ? 'jobs' : `of ${totalResults} jobs`}</p>
                   <div className="w-full bg-gray-200 rounded-full h-2 max-w-xs mx-auto">
                     <div 
                       className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                      style={{ width: `${Math.min((jobs.length / totalResults) * 100, 100)}%` }}
+                      style={{ width: `${totalResults > 0 ? Math.min((jobs.length / Math.max(totalResults, jobs.length)) * 100, 100) : 100}%` }}
                     ></div>
                   </div>
                   <p className="text-xs text-gray-400">
-                    Progress: {Math.round((jobs.length / totalResults) * 100)}% complete
+                    Progress: {totalResults > 0 ? Math.min(Math.round((jobs.length / Math.max(totalResults, jobs.length)) * 100), 100) : 100}% complete
                   </p>
                 </div>
               </div>

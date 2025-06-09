@@ -70,31 +70,44 @@ class JobSearchService {
     console.log(`Insufficient database results (${databaseJobs.length}) - making API request`);
     try {
       const apiResponse = await this.fetchFromAPI(normalizedFilters);
-      const newJobs = this.deduplicateJobs(apiResponse.data, databaseJobs);
+      const newJobsFromApi = this.deduplicateJobs(apiResponse.data, databaseJobs);
 
-      if (newJobs.length > 0) {
+      if (newJobsFromApi.length > 0) {
         // STEP 4: Sanitize and enrich new data with AI
-        console.log(`Processing ${newJobs.length} new jobs from API`);
-        const sanitizedJobs = await this.sanitizeAndEnrichJobs(newJobs);
+        console.log(`Processing ${newJobsFromApi.length} new jobs from API`);
+        const sanitizedNewApiJobs = await this.sanitizeAndEnrichJobs(newJobsFromApi);
         
         // STEP 5: Update database with sanitized data
-        await this.updateDatabaseWithNewJobs(sanitizedJobs);
+        await this.updateDatabaseWithNewJobs(sanitizedNewApiJobs);
         
-        // Combine with existing database results
-        const allJobs = [...databaseJobs, ...sanitizedJobs].slice(0, normalizedFilters.limit!);
-        const response = this.createSuccessResponse(allJobs, normalizedFilters, {
+        // Combine with existing database results for the current page
+        const allPotentiallyDisplayableJobs = [...databaseJobs, ...sanitizedNewApiJobs];
+        const jobsForThisPage = allPotentiallyDisplayableJobs.slice(0, normalizedFilters.limit!);
+
+        let effectiveTotalResults = apiResponse.metadata.total_results;
+
+        // Ensure that the reported total_results is not less than the number of jobs actually shown on this page.
+        // This corrects scenarios like "Showing 30 of 26 jobs".
+        if (effectiveTotalResults < jobsForThisPage.length) {
+          effectiveTotalResults = jobsForThisPage.length;
+        }
+        
+        const responseMetadata = {
           from_cache: 0,
-          from_database: databaseJobs.length,
-          from_api: sanitizedJobs.length,
-          ...apiResponse.metadata
-        });
+          from_database: databaseJobs.length, // Number of items from DB that contributed to the page
+          from_api: sanitizedNewApiJobs.length, // Number of new items from API that contributed
+          ...apiResponse.metadata, // Spread API's original metadata (like page, limit if needed, though we override main ones)
+          total_results: effectiveTotalResults // Override with our calculated effective total
+        };
+        
+        const response = this.createSuccessResponse(jobsForThisPage, normalizedFilters, responseMetadata);
         
         // Cache the result
         jobCache.set(cacheKey, response);
         return response;
       }
 
-      // Return database jobs if no new ones found
+      // Return database jobs if no new ones found from API
       if (databaseJobs.length > 0) {
         console.log('No new API results - returning database results');
         return await this.processDatabaseResults(databaseJobs, normalizedFilters, cacheKey);
@@ -344,17 +357,35 @@ class JobSearchService {
     const jobsToEnrich = sanitizedJobs.slice(0, this.maxEnrichmentsPerRequest);
     return await AIEnrichmentService.enrichJobs(jobsToEnrich);
   }
-
   /**
    * Sanitize individual job data from API
    */
   private sanitizeJobData(job: any): any {
+    const { validateLocation } = require('../utils/location-validator');
+    const locationValue = job.location || '';
+    const longLocationValue = job.long_location || job.location || '';
+    const title = (job.job_title || job.title || '').toLowerCase();
+    const description = (job.description || job.short_description || '').toLowerCase();
+    const location = (locationValue + ' ' + longLocationValue).toLowerCase();
+
+    // Normalize remote/hybrid/on-site
+    let remote = false;
+    let hybrid = false;
+    let jobType: 'remote' | 'hybrid' | 'on-site' = 'on-site';
+    if (title.includes('remote') || description.includes('remote') || location.includes('remote')) {
+      remote = true;
+      jobType = 'remote';
+    } else if (title.includes('hybrid') || description.includes('hybrid') || location.includes('hybrid')) {
+      hybrid = true;
+      jobType = 'hybrid';
+    }
+
     return {
       id: job.id || `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       job_title: job.job_title || job.title || 'Unknown Position',
       company: job.company || job.company_object?.name || 'Unknown Company',
-      location: job.location || '',
-      long_location: job.long_location || job.location || '',
+      location: validateLocation(locationValue),
+      long_location: validateLocation(longLocationValue),
       description: job.description || job.short_description || '',
       short_description: job.short_description || job.description?.substring(0, 200) || '',
       date_posted: job.date_posted || new Date().toISOString(),
@@ -366,7 +397,9 @@ class JobSearchService {
       employment_statuses: Array.isArray(job.employment_statuses) ? job.employment_statuses : [],
       url: job.url || job.final_url || '',
       final_url: job.final_url || job.url || '',
-      remote: job.remote || false,
+      remote,
+      hybrid,
+      job_type: jobType,
       cachedAt: new Date()
     };
   }
@@ -391,24 +424,49 @@ class JobSearchService {
    * Create success response with metadata
    */
   private createSuccessResponse(
-    jobs: any[], 
-    filters: JobSearchFilters, 
-    metadata: any
+    jobs: any[], // current page's jobs
+    filters: JobSearchFilters, // contains page, limit for this request
+    responseSourceMetadata: { // what we constructed as finalMetadataForResponse
+        total_results: number;
+        from_cache?: number;
+        from_database?: number;
+        from_api?: number;
+        [key: string]: any; // for other things like api_strategy
+    }
   ): JobSearchResponse {
+    const currentPage = filters.page || 0;
+    const currentLimit = filters.limit || 3; 
+    const itemsFetchedThisPage = jobs.length;
+    // Calculate total items that would have been seen if all pages up to current were full
+    const itemsConsideredUpToThisPage = (currentPage * currentLimit) + itemsFetchedThisPage;
+
+    // Filter out explicitly managed keys from responseSourceMetadata before spreading
+    const additionalMetadata: { [key: string]: any } = {};
+    for (const key in responseSourceMetadata) {
+      if (Object.prototype.hasOwnProperty.call(responseSourceMetadata, key) &&
+          !['total_results', 'page', 'limit', 'has_more', 'from_cache', 'from_database', 'from_api'].includes(key)) {
+        additionalMetadata[key] = responseSourceMetadata[key];
+      }
+    }
+
     return {
       data: jobs,
       metadata: {
-        total_results: metadata.total_results || jobs.length,
-        page: filters.page || 0,
-        limit: filters.limit || 3,
-        has_more: metadata.total_results ? metadata.total_results > jobs.length : jobs.length >= (filters.limit || 3),
-        from_cache: metadata.from_cache || 0,
-        from_database: metadata.from_database || 0,
-        from_api: metadata.from_api || 0
+        ...additionalMetadata, // Spread additional metadata first
+        total_results: responseSourceMetadata.total_results,
+        page: currentPage,
+        limit: currentLimit,
+        has_more: responseSourceMetadata.total_results > itemsConsideredUpToThisPage,
+        from_cache: responseSourceMetadata.from_cache || 0,
+        from_database: responseSourceMetadata.from_database || 0,
+        from_api: responseSourceMetadata.from_api || 0,
       }
     };
   }
 
+  /**
+   * Get cached jobs with filters (fallback method)
+   */
   private async getCachedJobsWithFilters(queryParams: any): Promise<any[]> {
     const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     const limit = Number(queryParams.limit) || 3;
@@ -606,9 +664,31 @@ class JobSearchService {
     }
   }
 
-  private deduplicateJobs(newJobs: any[], existingJobs: any[]): any[] {
-    const existingJobIds = new Set(existingJobs.map((job: any) => String(job.id)));
-    return newJobs.filter((job: any) => !existingJobIds.has(String(job.id)));
+  private deduplicateJobs(apiJobs: any[], dbJobs: any[]): any[] {
+    const uniqueApiJobIds = new Set<string>();
+    const uniqueApiJobsInternal: any[] = [];
+
+    // First, ensure apiJobs itself is unique by ID
+    if (apiJobs && Array.isArray(apiJobs)) {
+      for (const job of apiJobs) {
+        if (job && job.id != null) { // Check if job and job.id are not null/undefined
+          const jobId = String(job.id);
+          if (!uniqueApiJobIds.has(jobId)) {
+            uniqueApiJobIds.add(jobId);
+            uniqueApiJobsInternal.push(job);
+          }
+        }
+      }
+    }
+
+    // Then, filter out jobs that already exist in dbJobs
+    const dbJobIds = new Set(
+      dbJobs.map((job: any) => (job && job.id != null) ? String(job.id) : null).filter(id => id !== null)
+    );
+    
+    return uniqueApiJobsInternal.filter((job: any) => 
+      (job && job.id != null) ? !dbJobIds.has(String(job.id)) : false
+    );
   }
 
   private async handleExistingJobs(existingJobs: any[], filters: JobSearchFilters, cacheKey: string): Promise<JobSearchResponse> {
