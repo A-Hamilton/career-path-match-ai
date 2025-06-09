@@ -4,7 +4,9 @@ import cors from 'cors';
 import { appConfig, validateConfig } from './config/app';
 import { logger } from './utils/logger';
 import { cleanupService } from './services/cleanup';
+import { MaintenanceService } from './services/maintenance';
 import routes from './routes';
+import cron from 'node-cron';
 
 // Validate configuration
 validateConfig();
@@ -58,6 +60,15 @@ if (require.main === module) {  // Initialize cleanup service
 
   app.listen(appConfig.port, () => {
     logger.info(`Server running on port ${appConfig.port} in ${appConfig.nodeEnv} mode`);
+  });
+
+  // Schedule daily maintenance at 2:00 AM
+  cron.schedule('0 2 * * *', async () => {
+    try {
+      await MaintenanceService.removeStaleJobs();
+    } catch (e) {
+      logger.error('Maintenance job failed:', e);
+    }
   });
 
   // Graceful shutdown

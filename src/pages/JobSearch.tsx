@@ -17,10 +17,12 @@ const JobSearch = () => {  const [searchTerm, setSearchTerm] = useState("");
   const [page, setPage] = useState(0);
   const [totalResults, setTotalResults] = useState(0);
   const [hasMore, setHasMore] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [loading, setLoading] = useState(false);  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [apiStrategy, setApiStrategy] = useState<number | null>(null);  // Fetch jobs from backend proxy with pagination
+  const [apiStrategy, setApiStrategy] = useState<number | null>(null);
+  const [isPolling, setIsPolling] = useState(false);
+  const [pollingMessage, setPollingMessage] = useState<string>('');
+  const [pollingAttempts, setPollingAttempts] = useState(0);  // Fetch jobs from backend proxy with pagination and polling support
   const fetchJobs = async (pageNum = 0, append = false) => {
     if (append) {
       setLoadingMore(true);
@@ -28,6 +30,8 @@ const JobSearch = () => {  const [searchTerm, setSearchTerm] = useState("");
       setLoading(true);
     }
     setError(null);
+    setIsPolling(false);
+    setPollingAttempts(0);
     
     let url = `/api/jobs?`;
     const params = new URLSearchParams();
@@ -73,46 +77,24 @@ const JobSearch = () => {  const [searchTerm, setSearchTerm] = useState("");
         throw new Error('API rate limit reached. Please try again later.');
       }
       
+      if (res.status === 202) {
+        // Jobs are being fetched asynchronously, start polling
+        const metadata = await res.json();
+        setPollingMessage(metadata.message || 'Fetching fresh job data...');
+        setIsPolling(true);
+        setLoading(false);
+        setLoadingMore(false);
+        startPolling(url, pageNum, append);
+        return;
+      }
+      
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
         throw new Error(errorData.message || `Server error: ${res.status}`);
       }
       
       const result = await res.json();
-      const fetchedJobs = result.data || [];
-      
-      // Update state from API response
-      setTotalResults(result.metadata?.total_results || 0);
-      setHasMore(result.metadata?.has_more || false);
-      setApiStrategy(result.metadata?.api_strategy || null);
-      
-      // Augment missing salary with AI estimate
-      const jobsWithEstimate = await Promise.all(
-        fetchedJobs.map(async (job) => {
-          if (!job.min_annual_salary_usd && !job.max_annual_salary_usd) {
-            try {
-              const resp = await fetch(
-                `/api/salary-estimate?id=${job.id}&title=${encodeURIComponent(job.job_title)}&location=${encodeURIComponent(job.long_location || '')}`
-              );
-              const json = await resp.json();
-              return { ...job, salary_estimate: json.range };
-            } catch {
-              return { ...job, salary_estimate: 'N/A' };
-            }
-          }
-          return job;
-        })
-      );
-      
-      setJobs(prev => {
-        if (append) {
-          const existingJobIds = new Set(prev.map(job => job.id));
-          const newUniqueJobs = jobsWithEstimate.filter(job => !existingJobIds.has(job.id));
-          return [...prev, ...newUniqueJobs];
-        }
-        return jobsWithEstimate;
-      });
-      setPage(pageNum);
+      await handleJobsResponse(result, pageNum, append);
       
     } catch (err: any) {
       console.error('Job search error:', err);
@@ -121,7 +103,122 @@ const JobSearch = () => {  const [searchTerm, setSearchTerm] = useState("");
       setLoading(false);
       setLoadingMore(false);
     }
-  };  useEffect(() => {
+  };
+  // Handle polling for async job fetching with smart logic
+  const startPolling = async (url: string, pageNum: number, append: boolean) => {
+    const maxAttempts = 20; // Maximum 20 attempts (about 1 minute with 3s intervals)
+    let attempts = 0;
+    let pollInterval = 3000; // Start with 3 seconds
+    
+    const poll = async () => {
+      attempts++;
+      setPollingAttempts(attempts);
+      
+      if (attempts > maxAttempts) {
+        setError('Job search timed out. Please try again.');
+        setIsPolling(false);
+        return;
+      }
+      
+      try {
+        const res = await fetch(url);
+        
+        if (res.status === 202) {
+          // Still processing, check metadata for smart handling
+          const metadata = await res.json();
+          setPollingMessage(metadata.message || `Searching for jobs... (${attempts}/${maxAttempts})`);
+          
+          // If search is already in progress, use exponential backoff
+          if (metadata.searchInProgress) {
+            pollInterval = Math.min(pollInterval * 1.5, 10000); // Max 10 seconds
+            setPollingMessage(metadata.message + ' (Extending search...)');
+          }
+          
+          setTimeout(poll, pollInterval);
+          return;
+        }
+        
+        if (res.status === 200) {
+          // Jobs are ready (or confirmed no results)!
+          const result = await res.json();
+          
+          // Check if this is a cached empty result
+          if (result.metadata?.cached && result.data.length === 0) {
+            setPollingMessage('No jobs found for this search criteria.');
+            // Show empty state immediately
+            await handleJobsResponse(result, pageNum, append);
+            setIsPolling(false);
+            return;
+          }
+          
+          // Regular successful result
+          await handleJobsResponse(result, pageNum, append);
+          setIsPolling(false);
+          return;
+        }
+        
+        // Handle other status codes
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}));
+          throw new Error(errorData.message || `Server error: ${res.status}`);
+        }
+        
+      } catch (err: any) {
+        console.error('Polling error:', err);
+        setError(err.message);
+        setIsPolling(false);
+      }
+    };
+    
+    // Start polling after a 2-second delay
+    setTimeout(poll, 2000);
+  };
+  // Handle job response data (shared between direct fetch and polling)
+  const handleJobsResponse = async (result: any, pageNum: number, append: boolean) => {
+    const fetchedJobs = result.data || [];
+    
+    // Update state from API response
+    setTotalResults(result.metadata?.total_results || 0);
+    setHasMore(result.metadata?.has_more || false);
+    setApiStrategy(result.metadata?.api_strategy || null);
+    
+    // Handle empty results
+    if (fetchedJobs.length === 0) {
+      if (!append) {
+        setJobs([]);
+      }
+      setPage(pageNum);
+      return;
+    }
+    
+    // Augment missing salary with AI estimate
+    const jobsWithEstimate = await Promise.all(
+      fetchedJobs.map(async (job) => {
+        if (!job.min_annual_salary_usd && !job.max_annual_salary_usd) {
+          try {
+            const resp = await fetch(
+              `/api/salary-estimate?id=${job.id}&title=${encodeURIComponent(job.job_title)}&location=${encodeURIComponent(job.long_location || '')}`
+            );
+            const json = await resp.json();
+            return { ...job, salary_estimate: json.range };
+          } catch {
+            return { ...job, salary_estimate: 'N/A' };
+          }
+        }
+        return job;
+      })
+    );
+    
+    setJobs(prev => {
+      if (append) {
+        const existingJobIds = new Set(prev.map(job => job.id));
+        const newUniqueJobs = jobsWithEstimate.filter(job => !existingJobIds.has(job.id));
+        return [...prev, ...newUniqueJobs];
+      }
+      return jobsWithEstimate;
+    });
+    setPage(pageNum);
+  };useEffect(() => {
     fetchJobs(0, false); // Initial load
     // eslint-disable-next-line
   }, []);
@@ -230,9 +327,9 @@ const JobSearch = () => {  const [searchTerm, setSearchTerm] = useState("");
                   </SelectContent>
                 </Select>
               </div>              <div className="flex items-center mt-4 gap-4">
-                <Button className="bg-blue-600 hover:bg-blue-700" onClick={handleSearch} disabled={loading}>
+                <Button className="bg-blue-600 hover:bg-blue-700" onClick={handleSearch} disabled={loading || isPolling}>
                   <Search className="h-4 w-4 mr-2" />
-                  {loading ? 'Searching...' : 'Search Jobs'}
+                  {loading || isPolling ? 'Searching...' : 'Search Jobs'}
                 </Button>
                 <Button variant="outline">
                   <Filter className="h-4 w-4 mr-2" />
@@ -265,7 +362,7 @@ const JobSearch = () => {  const [searchTerm, setSearchTerm] = useState("");
             </Select>
           </div>          {/* Job Listing Results */}
           <div className="space-y-4">
-            {loading && (
+            {(loading || isPolling) && (
               <div className="text-center py-12">
                 <div className="relative inline-block">
                   <div className="w-16 h-16 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-4"></div>
@@ -274,13 +371,33 @@ const JobSearch = () => {  const [searchTerm, setSearchTerm] = useState("");
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <p className="text-lg font-medium text-gray-700">Searching for perfect matches...</p>
+                  <p className="text-lg font-medium text-gray-700">
+                    {isPolling ? pollingMessage : 'Searching for perfect matches...'}
+                  </p>
                   <div className="flex items-center justify-center space-x-1">
                     <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce"></div>
                     <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
                     <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
                   </div>
-                  <p className="text-sm text-gray-500">Analyzing job market data and matching your preferences</p>
+                  {isPolling && pollingAttempts > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-sm text-gray-500">
+                        Searching external job boards for fresh opportunities...
+                      </p>
+                      <div className="w-64 mx-auto bg-gray-200 rounded-full h-2">
+                        <div 
+                          className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                          style={{ width: `${(pollingAttempts / 20) * 100}%` }}
+                        ></div>
+                      </div>
+                      <p className="text-xs text-gray-400">
+                        Attempt {pollingAttempts} of 20
+                      </p>
+                    </div>
+                  )}
+                  {!isPolling && (
+                    <p className="text-sm text-gray-500">Analyzing job market data and matching your preferences</p>
+                  )}
                 </div>
               </div>
             )}
@@ -300,7 +417,7 @@ const JobSearch = () => {  const [searchTerm, setSearchTerm] = useState("");
               </div>
             )}
             
-            {!loading && !error && sortedJobs.map((job) => (
+            {!loading && !isPolling && !error && sortedJobs.map((job) => (
               <Card key={job.id} className="group hover:shadow-lg transition-all duration-300 hover:border-blue-200">
                 <CardContent className="p-6">
                   <div className="flex items-start justify-between">
@@ -380,7 +497,7 @@ const JobSearch = () => {  const [searchTerm, setSearchTerm] = useState("");
               </Card>
             ))}
           </div>
-          {!loading && !error && jobs.length === 0 && (
+          {!loading && !isPolling && !error && jobs.length === 0 && (
             <div className="text-center py-12">
               <p className="text-gray-500 text-lg">No jobs found matching your criteria.</p>
               <Button 
@@ -398,7 +515,7 @@ const JobSearch = () => {  const [searchTerm, setSearchTerm] = useState("");
               </Button>
             </div>
           )}          {/* Load More (pagination) */}
-          {!loading && !error && jobs.length > 0 && hasMore && (
+          {!loading && !isPolling && !error && jobs.length > 0 && hasMore && (
             <div className="text-center mt-8">
               <div className="space-y-4">                <Button 
                   onClick={handleLoadMore}
@@ -433,10 +550,9 @@ const JobSearch = () => {  const [searchTerm, setSearchTerm] = useState("");
                 </div>
               </div>
             </div>
-          )}
-          
+          )}          
           {/* All jobs loaded message */}
-          {!loading && !error && jobs.length > 0 && !hasMore && jobs.length === totalResults && (
+          {!loading && !isPolling && !error && jobs.length > 0 && !hasMore && jobs.length === totalResults && (
             <div className="text-center mt-8 py-6 border-t border-gray-200">
               <div className="inline-flex items-center space-x-2 text-green-600">
                 <div className="w-5 h-5 rounded-full bg-green-100 flex items-center justify-center">

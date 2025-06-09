@@ -3,15 +3,20 @@ import { Router, Request, Response } from 'express';
 import { jobSearchService } from '../services/job-search';
 import { AIEnrichmentService } from '../services/ai-enrichment';
 import { logger } from '../utils/logger';
+import { MaintenanceService } from '../services/maintenance';
 
 const router = Router();
 
-// GET /api/jobs - Search for jobs
+// GET /api/jobs - Search for jobs (Algolia first, async fallback)
 router.get('/', async (req: Request, res: Response) => {
   try {
-    // Use the getJobs method which handles frontend query parameters properly
     const result = await jobSearchService.getJobs(req.query);
-    res.json(result);
+    if (result.status === 202) {
+      // No jobs yet, async fetch triggered
+      return res.status(202).json(result.metadata);
+    }
+    // Return jobs from Algolia
+    return res.status(200).json({ data: result.data, metadata: result.metadata });
   } catch (error) {
     logger.error('Error in GET /api/jobs:', error);
     res.status(500).json({ 
@@ -21,43 +26,41 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/jobs - Search and enrich jobs with AI
+// POST /api/jobs - Search and enrich jobs with AI (Algolia first, async fallback)
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const {
-      search = '',
-      location = '',
-      sortBy = 'relevance',
-      limit = 3,
-      offset = 0,
-      country = ''
-    } = req.body;
-
-    const searchParams = {
-      search: search as string,
-      location: location as string,
-      sortBy: sortBy as string,
-      limit: Math.min(limit, 10), // Cap at 10
-      offset: offset as number,
-      country: country as string
-    };    // Search for jobs
-    const searchResult = await jobSearchService.searchJobs(searchParams);
-    
-    if (!searchResult.data || searchResult.data.length === 0) {
-      return res.json(searchResult);
+    const result = await jobSearchService.getJobs(req.body);
+    if (result.status === 202) {
+      // No jobs yet, async fetch triggered
+      return res.status(202).json(result.metadata);
     }
-
-    // Enrich jobs with AI
-    const enrichedJobs = await AIEnrichmentService.enrichJobs(searchResult.data);
-    
-    res.json({
-      ...searchResult,
+    // Enrich jobs with AI if found
+    const enrichedJobs = await AIEnrichmentService.enrichJobs(result.data);
+    res.status(200).json({
+      ...result,
       data: enrichedJobs
     });
   } catch (error) {
     logger.error('Error in POST /api/jobs:', error);
     res.status(500).json({ 
       error: 'Failed to search and enrich jobs', 
+      message: error instanceof Error ? error.message : 'Unknown error' 
+    });
+  }
+});
+
+// DELETE /api/jobs/clear-duplicates - Clear duplicate/mock jobs (development only)
+router.delete('/clear-duplicates', async (req: Request, res: Response) => {
+  try {
+    await MaintenanceService.clearMockJobs();
+    res.status(200).json({ 
+      message: 'Successfully cleared duplicate jobs',
+      success: true 
+    });
+  } catch (error) {
+    logger.error('Error clearing duplicate jobs:', error);
+    res.status(500).json({ 
+      error: 'Failed to clear duplicate jobs', 
       message: error instanceof Error ? error.message : 'Unknown error' 
     });
   }
