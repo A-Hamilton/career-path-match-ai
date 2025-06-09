@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Search, MapPin, Filter, Briefcase, Clock, DollarSign, Building, Heart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -8,8 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 
-const JobSearch = () => {
-  const [searchTerm, setSearchTerm] = useState("");
+const JobSearch = () => {  const [searchTerm, setSearchTerm] = useState("");
   const [location, setLocation] = useState("");
   const [jobType, setJobType] = useState("all");
   const [salaryRange, setSalaryRange] = useState("all");
@@ -17,41 +16,76 @@ const JobSearch = () => {
   const [jobs, setJobs] = useState<any[]>([]);
   const [page, setPage] = useState(0);
   const [totalResults, setTotalResults] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Fetch jobs from backend proxy with pagination
+  const [apiStrategy, setApiStrategy] = useState<number | null>(null);  // Fetch jobs from backend proxy with pagination
   const fetchJobs = async (pageNum = 0, append = false) => {
-    setLoading(true);
+    if (append) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+    }
     setError(null);
+    
     let url = `/api/jobs?`;
     const params = new URLSearchParams();
+    
     if (searchTerm) params.append('what', searchTerm);
     if (location) params.append('where', location);
     if (jobType !== "all") params.append('contract_type', jobType.toLowerCase());
+    
     // Salary range parsing
     if (salaryRange !== "all") {
-      if (salaryRange === "50k-75k") { params.append('salary_min', '50000'); params.append('salary_max', '75000'); }
-      if (salaryRange === "75k-100k") { params.append('salary_min', '75000'); params.append('salary_max', '100000'); }
-      if (salaryRange === "100k-150k") { params.append('salary_min', '100000'); params.append('salary_max', '150000'); }
-      if (salaryRange === "150k+") { params.append('salary_min', '150000'); }
+      if (salaryRange === "50k-75k") { 
+        params.append('salary_min', '50000'); 
+        params.append('salary_max', '75000'); 
+      }
+      if (salaryRange === "75k-100k") { 
+        params.append('salary_min', '75000'); 
+        params.append('salary_max', '100000'); 
+      }
+      if (salaryRange === "100k-150k") { 
+        params.append('salary_min', '100000'); 
+        params.append('salary_max', '150000'); 
+      }
+      if (salaryRange === "150k+") { 
+        params.append('salary_min', '150000'); 
+      }
     }
+    
     // Add sorting parameter
     if (sortBy !== "relevance") {
       params.append('sort', sortBy);
     }
+    
     // Add pagination params - limit to 3 jobs per request
     params.append('page', String(pageNum));
     params.append('limit', '3');
+    
     url += params.toString();
+    
     try {
       const res = await fetch(url);
+      
       if (res.status === 429) {
         throw new Error('API rate limit reached. Please try again later.');
       }
-      if (!res.ok) throw new Error("Failed to fetch jobs");
+      
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.message || `Server error: ${res.status}`);
+      }
+      
       const result = await res.json();
       const fetchedJobs = result.data || [];
+      
+      // Update state from API response
       setTotalResults(result.metadata?.total_results || 0);
+      setHasMore(result.metadata?.has_more || false);
+      setApiStrategy(result.metadata?.api_strategy || null);
+      
       // Augment missing salary with AI estimate
       const jobsWithEstimate = await Promise.all(
         fetchedJobs.map(async (job) => {
@@ -69,23 +103,58 @@ const JobSearch = () => {
           return job;
         })
       );
+      
       setJobs(prev => append ? [...prev, ...jobsWithEstimate] : jobsWithEstimate);
       setPage(pageNum);
+      
     } catch (err: any) {
+      console.error('Job search error:', err);
       setError(err.message);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
-  };
-  useEffect(() => {
+  };  useEffect(() => {
     fetchJobs(0, false); // Initial load
     // eslint-disable-next-line
   }, []);
-  // Trigger new search when sort changes
-  useEffect(() => {
+
+  // Client-side sorting function
+  const sortedJobs = useMemo(() => {
+    const jobsCopy = [...jobs];
+    
+    switch (sortBy) {
+      case 'newest':
+        return jobsCopy.sort((a, b) => new Date(b.posted_date || 0).getTime() - new Date(a.posted_date || 0).getTime());
+      case 'salary':
+        return jobsCopy.sort((a, b) => {
+          const salaryA = Math.max(a.min_annual_salary_usd || 0, a.max_annual_salary_usd || 0);
+          const salaryB = Math.max(b.min_annual_salary_usd || 0, b.max_annual_salary_usd || 0);
+          return salaryB - salaryA;
+        });
+      case 'match':
+        return jobsCopy.sort((a, b) => (b.match_score || 0) - (a.match_score || 0));
+      case 'relevance':
+      default:
+        return jobsCopy; // Keep original API relevance order
+    }
+  }, [jobs, sortBy]);
+
+  // Handle search form submission
+  const handleSearch = useCallback(() => {
     fetchJobs(0, false);
-    // eslint-disable-next-line
-  }, [sortBy]);
+  }, [searchTerm, location, jobType, salaryRange]);  // Handle load more
+  const handleLoadMore = useCallback(() => {
+    if (hasMore && !loadingMore) {
+      fetchJobs(page + 1, true);
+    }
+  }, [hasMore, loadingMore, page]);
+
+  // Handle form submission (Enter key)
+  const handleFormSubmit = useCallback((e: React.FormEvent) => {
+    e.preventDefault();
+    handleSearch();
+  }, [handleSearch]);
 
   const getMatchColor = (score: number) => {
     if (score >= 90) return "bg-green-100 text-green-800";
@@ -153,11 +222,10 @@ const JobSearch = () => {
                     <SelectItem value="150k+">$150k+</SelectItem>
                   </SelectContent>
                 </Select>
-              </div>
-              <div className="flex items-center mt-4 gap-4">
-                <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => fetchJobs(0, false)}>
+              </div>              <div className="flex items-center mt-4 gap-4">
+                <Button className="bg-blue-600 hover:bg-blue-700" onClick={handleSearch} disabled={loading}>
                   <Search className="h-4 w-4 mr-2" />
-                  Search Jobs
+                  {loading ? 'Searching...' : 'Search Jobs'}
                 </Button>
                 <Button variant="outline">
                   <Filter className="h-4 w-4 mr-2" />
@@ -165,11 +233,19 @@ const JobSearch = () => {
                 </Button>
               </div>
             </CardContent>
-          </Card>
-          <div className="flex items-center justify-between mb-6">
-            <p className="text-gray-600">
-              {jobs.length} jobs found {searchTerm && `for "${searchTerm}"`}
-            </p>            <Select value={sortBy} onValueChange={setSortBy}>
+          </Card>          <div className="flex items-center justify-between mb-6">
+            <div>
+              <p className="text-gray-600">
+                {jobs.length} jobs found {searchTerm && `for "${searchTerm}"`}
+                {totalResults > jobs.length && ` (${totalResults} total available)`}
+              </p>
+              {apiStrategy && apiStrategy > 1 && (
+                <p className="text-sm text-orange-600 mt-1">
+                  ⚠️ Some search filters were simplified to find results
+                </p>
+              )}
+            </div>
+            <Select value={sortBy} onValueChange={setSortBy}>
               <SelectTrigger className="w-48">
                 <SelectValue placeholder="Sort by" />
               </SelectTrigger>
@@ -180,12 +256,44 @@ const JobSearch = () => {
                 <SelectItem value="match">Best Match</SelectItem>
               </SelectContent>
             </Select>
-          </div>
-          {/* Job Listing Results */}
+          </div>          {/* Job Listing Results */}
           <div className="space-y-4">
-            {loading && <div className="text-center py-8">Loading jobs...</div>}
-            {error && <div className="text-center text-red-500 py-8">{error}</div>}
-            {!loading && !error && jobs.map((job) => (
+            {loading && (
+              <div className="text-center py-12">
+                <div className="relative inline-block">
+                  <div className="w-16 h-16 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-4"></div>
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <Search className="h-6 w-6 text-blue-600" />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-lg font-medium text-gray-700">Searching for perfect matches...</p>
+                  <div className="flex items-center justify-center space-x-1">
+                    <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce"></div>
+                    <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                    <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                  </div>
+                  <p className="text-sm text-gray-500">Analyzing job market data and matching your preferences</p>
+                </div>
+              </div>
+            )}
+            
+            {error && (
+              <div className="text-center py-8">
+                <div className="bg-red-50 border border-red-200 rounded-lg p-6 max-w-md mx-auto">
+                  <div className="text-red-600 mb-2">❌ Search Error</div>
+                  <p className="text-red-700 mb-4">{error}</p>                  <Button 
+                    variant="outline" 
+                    onClick={handleSearch}
+                    className="border-red-300 text-red-600 hover:bg-red-50"
+                  >
+                    Try Again
+                  </Button>
+                </div>
+              </div>
+            )}
+            
+            {!loading && !error && sortedJobs.map((job) => (
               <Card key={job.id} className="group hover:shadow-lg transition-all duration-300 hover:border-blue-200">
                 <CardContent className="p-6">
                   <div className="flex items-start justify-between">
@@ -276,16 +384,55 @@ const JobSearch = () => {
               </Button>
             </div>
           )}          {/* Load More (pagination) */}
-          {!loading && !error && jobs.length > 0 && jobs.length < totalResults && (
-            <div className="text-center mt-6">
-              <Button 
-                onClick={() => fetchJobs(page + 1, true)}
-                disabled={loading}
-              >
-                {loading ? "Loading..." : "Load More"}
-              </Button>
+          {!loading && !error && jobs.length > 0 && hasMore && (
+            <div className="text-center mt-8">
+              <div className="space-y-4">                <Button 
+                  onClick={handleLoadMore}
+                  disabled={loadingMore}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 text-lg"
+                  size="lg"
+                >
+                  {loadingMore ? (
+                    <div className="flex items-center space-x-2">
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <span>Loading More Jobs...</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center space-x-2">
+                      <span>Load More Jobs</span>
+                      <div className="w-5 h-5 border border-white rounded-full flex items-center justify-center">
+                        <span className="text-xs">+</span>
+                      </div>
+                    </div>
+                  )}
+                </Button>
+                <div className="text-sm text-gray-500 space-y-1">
+                  <p>Showing {jobs.length} of {totalResults} jobs</p>
+                  <div className="w-full bg-gray-200 rounded-full h-2 max-w-xs mx-auto">
+                    <div 
+                      className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${Math.min((jobs.length / totalResults) * 100, 100)}%` }}
+                    ></div>
+                  </div>
+                  <p className="text-xs text-gray-400">
+                    Progress: {Math.round((jobs.length / totalResults) * 100)}% complete
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* All jobs loaded message */}
+          {!loading && !error && jobs.length > 0 && !hasMore && jobs.length === totalResults && (
+            <div className="text-center mt-8 py-6 border-t border-gray-200">
+              <div className="inline-flex items-center space-x-2 text-green-600">
+                <div className="w-5 h-5 rounded-full bg-green-100 flex items-center justify-center">
+                  <span className="text-green-600 text-xs">✓</span>
+                </div>
+                <span className="font-medium">All {totalResults} jobs loaded</span>
+              </div>
               <p className="text-sm text-gray-500 mt-2">
-                Showing {jobs.length} of {totalResults} jobs
+                You've seen all available jobs for this search
               </p>
             </div>
           )}

@@ -1,7 +1,7 @@
 {
   "name": "career-path-match-ai-server",
-  "version": "0.1.0",
-  "scripts": {
+  "version": "0.1.0",  "scripts": {
+    "build": "tsc",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "start": "node dist/index.js",
     "test": "jest --config jest.config.js --runInBand"

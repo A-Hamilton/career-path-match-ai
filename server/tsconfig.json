@@ -10,11 +10,14 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
+    "downlevelIteration": true,
     "outDir": "./dist",
     "rootDir": "./src",
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "isolatedModules": true,
+    "noEmitOnError": false
   },
   "include": [
     "src/**/*"

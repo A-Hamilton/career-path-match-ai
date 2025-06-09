@@ -56,8 +56,7 @@ class DatabaseService {
   }
   /**
    * Get jobs with advanced filtering and pagination
-   */
-  async getJobsWithFilters(filters: {
+   */  async getJobsWithFilters(filters: {
     cutoffDate?: string;
     salaryMin?: number;
     salaryMax?: number;
@@ -67,40 +66,46 @@ class DatabaseService {
     limit?: number;
   }): Promise<Job[]> {
     try {
-      let query: Query<DocumentData> | CollectionReference<DocumentData> = db.getFirestore().collection(this.jobsCollection);
+      let query: Query<DocumentData> = db.getFirestore().collection(this.jobsCollection);
 
-      // Apply filters
+      // Apply Firestore-supported filters only (date, salary)
       if (filters.cutoffDate) {
         query = query.where('date_posted', '>=', filters.cutoffDate);
       }
-
       if (filters.salaryMin && !filters.salaryMax) {
         query = query.where('min_annual_salary_usd', '>=', filters.salaryMin);
       } else if (filters.salaryMax && !filters.salaryMin) {
         query = query.where('max_annual_salary_usd', '<=', filters.salaryMax);
       }
-
-      // Add text search optimization for job title
-      if (filters.jobTitle) {
-        const title = filters.jobTitle.toLowerCase();
-        query = query.where('job_title', '>=', title)
-                    .where('job_title', '<=', title + '\uf8ff');
-      }
-
       // Order by date for consistent pagination
       query = query.orderBy('date_posted', 'desc');
-
-      // Apply pagination
       if (filters.offset) {
         query = query.offset(filters.offset);
       }
       if (filters.limit) {
-        query = query.limit(filters.limit);
+        query = query.limit(filters.limit * 3 || 15); // get extra for in-memory filtering
       }
-
       const snapshot = await query.get();
-      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Job));
-
+      let jobs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Job));
+      console.log(`[DB] Raw jobs fetched: ${jobs.length}`);
+      // In-memory filtering for jobTitle and location (case-insensitive, partial match)
+      if (filters.jobTitle) {
+        const search = filters.jobTitle.trim().toLowerCase();
+        jobs = jobs.filter(job => (job.job_title || '').toLowerCase().includes(search));
+      }
+      if (filters.location) {
+        const loc = filters.location.trim().toLowerCase();
+        jobs = jobs.filter(job =>
+          (job.location || '').toLowerCase().includes(loc) ||
+          (job.long_location || '').toLowerCase().includes(loc)
+        );
+      }
+      // Final limit
+      if (filters.limit) {
+        jobs = jobs.slice(0, filters.limit);
+      }
+      console.log(`[DB] Jobs after in-memory filter: ${jobs.length}`);
+      return jobs;
     } catch (error) {
       console.error('Error getting jobs with filters:', error);
       throw new Error(`Failed to fetch filtered jobs: ${error}`);
@@ -108,20 +113,78 @@ class DatabaseService {
   }
 
   /**
-   * Get a single job by ID
+   * Count jobs matching advanced filters (without pagination)
+   */
+  async countJobsWithFilters(filters: {
+    cutoffDate?: string;
+    salaryMin?: number;
+    salaryMax?: number;
+    location?: string;
+    jobTitle?: string;
+  }): Promise<number> {
+    try {
+      let query = db.getFirestore().collection(this.jobsCollection) as Query<DocumentData>;
+      if (filters.cutoffDate) {
+        query = query.where('date_posted', '>=', filters.cutoffDate);
+      }
+      if (filters.salaryMin != null && filters.salaryMax == null) {
+        query = query.where('min_annual_salary_usd', '>=', filters.salaryMin!);
+      } else if (filters.salaryMax != null && filters.salaryMin == null) {
+        query = query.where('max_annual_salary_usd', '<=', filters.salaryMax!);
+      }
+      if (filters.jobTitle) {
+        const title = filters.jobTitle.toLowerCase();
+        // cannot index partial, skip title filter for count
+      }
+      if (filters.location) {
+        // location filter not supported in Firestore, skip for count
+      }
+      // Use Firestore count aggregation
+      const snapshot = await (query.count().get());
+      return snapshot.data().count || 0;
+    } catch (error) {
+      console.error('Error counting jobs with filters:', error);
+      return 0;
+    }
+  }
+
+  /**
+   * Get a job by ID
    */
   async getJobById(jobId: string): Promise<Job | null> {
     try {
-      const doc = await db.getFirestore().collection(this.jobsCollection).doc(jobId).get();
+      const doc = await db.getFirestore()
+        .collection(this.jobsCollection)
+        .doc(jobId)
+        .get();
       
       if (!doc.exists) {
         return null;
       }
-
+      
       return { id: doc.id, ...doc.data() } as Job;
     } catch (error) {
       console.error('Error getting job by ID:', error);
-      throw new Error(`Failed to fetch job: ${error}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Update job salary information
+   */
+  async updateJobSalary(jobId: string, minSalary: number, maxSalary: number): Promise<void> {
+    try {
+      await db.getFirestore()
+        .collection(this.jobsCollection)
+        .doc(jobId)
+        .update({
+          min_annual_salary_usd: minSalary,
+          max_annual_salary_usd: maxSalary,
+          updatedAt: new Date()
+        });
+    } catch (error) {
+      console.error('Error updating job salary:', error);
+      throw error;
     }
   }
 

@@ -1,6 +1,6 @@
 // App configuration and constants
 import { config } from 'dotenv';
-import path from 'path';
+import * as path from 'path';
 
 // Load environment variables from the server directory
 const envPath = path.join(__dirname, '..', '..', '.env');

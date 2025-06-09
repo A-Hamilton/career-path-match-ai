@@ -48,10 +48,10 @@ export class CacheManager<T> {
   public size(): number {
     return this.cache.size;
   }
-  
-  private cleanup(): void {
+    private cleanup(): void {
     const now = Date.now();
-    for (const [key, item] of this.cache.entries()) {
+    const entries = Array.from(this.cache.entries());
+    for (const [key, item] of entries) {
       if (item.expires < now) {
         this.cache.delete(key);
       }

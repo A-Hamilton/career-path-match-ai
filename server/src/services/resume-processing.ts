@@ -207,32 +207,78 @@ class ResumeProcessingService {
         }
       }
     `;    try {
-      const model = aiConfig.client.getGenerativeModel({ model: 'gemini-1.5-flash' });
+      const model = aiConfig.client.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
       const result = await model.generateContent(prompt);
-      const response = await result.response;
-
-      const rawAnalysis = response.text()?.trim() || 'No analysis available.';
+      const response = await result.response;const rawAnalysis = response.text()?.trim() || 'No analysis available.';
       
       // Clean and parse the AI response
-      const cleanedAnalysis = rawAnalysis.replace(/```json|```/g, '').trim();
+      let cleanedAnalysis = rawAnalysis
+        .replace(/```json|```/g, '')
+        .trim();
+      
+      // Remove comments and fix common JSON issues
+      cleanedAnalysis = this.cleanJsonResponse(cleanedAnalysis);
       
       let parsedAnalysis: ParsedResumeData;
       try {
         parsedAnalysis = JSON.parse(cleanedAnalysis);
       } catch (parseError) {
         console.error('Failed to parse AI response:', cleanedAnalysis);
-        throw new Error('Invalid AI response format');
-      }
-
-      // Validate required fields
-      this.validateParsedData(parsedAnalysis);
+        console.error('Parse error:', parseError);
+        
+        // Try to extract JSON from the response
+        const jsonMatch = cleanedAnalysis.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            parsedAnalysis = JSON.parse(this.cleanJsonResponse(jsonMatch[0]));
+          } catch (secondParseError) {
+            throw new Error(`Invalid AI response format: ${secondParseError}`);
+          }
+        } else {
+          throw new Error('No valid JSON found in AI response');
+        }
+      }      // Validate required fields
+      this.validateAndSanitizeParsedData(parsedAnalysis);
 
       return parsedAnalysis;
 
     } catch (error) {
       console.error('AI parsing error:', error);
-      throw new Error(`Failed to parse resume with AI: ${error}`);
+      
+      // Fallback to basic parsing strategy
+      const fallbackData = this.createFallbackResumeData(content);
+      console.warn('Falling back to basic resume parsing strategy');
+      return fallbackData;
+    }  }
+
+  /**
+   * Clean JSON response by removing comments and fixing common issues
+   */
+  private cleanJsonResponse(jsonString: string): string {
+    // Remove single-line comments (// ...)
+    jsonString = jsonString.replace(/\/\/.*$/gm, '');
+    
+    // Remove multi-line comments (/* ... */)
+    jsonString = jsonString.replace(/\/\*[\s\S]*?\*\//g, '');
+    
+    // Remove trailing commas
+    jsonString = jsonString.replace(/,(\s*[}\]])/g, '$1');
+    
+    // Fix unescaped quotes in string values
+    jsonString = jsonString.replace(/"([^"]*)"([^"]*)"([^"]*)":/g, '"$1\\"$2\\"$3":');
+    
+    // Remove any leading/trailing whitespace and non-JSON content
+    jsonString = jsonString.trim();
+    
+    // Ensure it starts with { and ends with }
+    const startIndex = jsonString.indexOf('{');
+    const endIndex = jsonString.lastIndexOf('}');
+    
+    if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
+      jsonString = jsonString.substring(startIndex, endIndex + 1);
     }
+    
+    return jsonString;
   }
 
   /**
@@ -375,6 +421,250 @@ class ResumeProcessingService {
       uploadPath: this.uploadPath
     };
   }
+
+  /**
+   * Create fallback resume data when AI parsing fails
+   */
+  private createFallbackResumeData(rawText: string): ParsedResumeData {
+    console.warn('Creating fallback resume data due to AI parsing failure');
+    
+    // Basic text analysis for fallback
+    const text = rawText.toLowerCase();
+    const lines = rawText.split('\n').filter(line => line.trim());
+    
+    return {
+      workExperience: this.extractWorkExperienceFromText(lines),
+      skills: this.extractSkillsFromText(text),
+      education: this.extractEducationFromText(lines),
+      projects: [],
+      certifications: [],
+      summary: lines.slice(0, 3).join(' ').substring(0, 200) + '...',
+      strengths: ['Experience in relevant field'],
+      improvements: ['Add more specific details', 'Include quantifiable achievements'],
+      keywords: {
+        found: this.extractBasicKeywords(text),
+        missing: ['leadership', 'teamwork', 'communication', 'problem-solving']
+      }
+    };
+  }
+  /**
+   * Enhanced validation that also sanitizes data
+   */
+  private validateAndSanitizeParsedData(data: any): void {
+    const requiredFields = [
+      'workExperience', 'skills', 'education', 'projects', 
+      'certifications', 'summary', 'strengths', 'improvements', 'keywords'
+    ];
+
+    // Ensure all required fields exist and are arrays/objects as expected
+    for (const field of requiredFields) {
+      if (!(field in data)) {
+        console.warn(`Missing field ${field}, adding default`);
+        if (['workExperience', 'skills', 'education', 'projects', 'certifications', 'strengths', 'improvements'].includes(field)) {
+          data[field] = [];
+        } else if (field === 'summary') {
+          data[field] = 'No summary available';
+        } else if (field === 'keywords') {
+          data[field] = { found: [], missing: [] };
+        }
+      }
+    }
+
+    // Sanitize arrays
+    ['workExperience', 'skills', 'education', 'projects', 'certifications', 'strengths', 'improvements'].forEach(field => {
+      if (!Array.isArray(data[field])) {
+        console.warn(`Field ${field} is not an array, converting`);
+        data[field] = [];
+      }
+      
+      // Limit array sizes to prevent excessive data
+      if (data[field].length > 20) {
+        console.warn(`Field ${field} has ${data[field].length} items, truncating to 20`);
+        data[field] = data[field].slice(0, 20);
+      }
+    });
+
+    // Sanitize work experience entries
+    if (Array.isArray(data.workExperience)) {
+      data.workExperience = data.workExperience.map((exp: any) => {
+        return {
+          title: this.sanitizeString(exp.title, 'Job Title'),
+          company: this.sanitizeString(exp.company, 'Company'),
+          duration: this.sanitizeString(exp.duration, 'Duration'),
+          description: this.sanitizeString(exp.description, 'Job description', 500)
+        };
+      });
+    }
+
+    // Sanitize education entries
+    if (Array.isArray(data.education)) {
+      data.education = data.education.map((edu: any) => {
+        return {
+          institution: this.sanitizeString(edu.institution, 'Institution'),
+          degree: this.sanitizeString(edu.degree, 'Degree'),
+          field: this.sanitizeString(edu.field, 'Field of Study'),
+          year: this.sanitizeString(edu.year, 'Year')
+        };
+      });
+    }
+
+    // Sanitize project entries
+    if (Array.isArray(data.projects)) {
+      data.projects = data.projects.map((project: any) => {
+        return {
+          name: this.sanitizeString(project.name, 'Project Name'),
+          description: this.sanitizeString(project.description, 'Project description', 300),
+          technologies: Array.isArray(project.technologies) ? project.technologies.slice(0, 10) : [],
+          url: this.sanitizeString(project.url, '')
+        };
+      });
+    }
+
+    // Sanitize certification entries
+    if (Array.isArray(data.certifications)) {
+      data.certifications = data.certifications.map((cert: any) => {
+        return {
+          name: this.sanitizeString(cert.name, 'Certification'),
+          issuer: this.sanitizeString(cert.issuer, 'Issuer'),
+          date: this.sanitizeString(cert.date, 'Date'),
+          url: this.sanitizeString(cert.url, '')
+        };
+      });
+    }
+
+    // Sanitize skills array
+    if (Array.isArray(data.skills)) {
+      data.skills = data.skills
+        .filter((skill: any) => typeof skill === 'string' && skill.trim())
+        .map((skill: string) => skill.trim().slice(0, 50))
+        .slice(0, 30);
+    }
+
+    // Sanitize strengths and improvements
+    ['strengths', 'improvements'].forEach(field => {
+      if (Array.isArray(data[field])) {
+        data[field] = data[field]
+          .filter((item: any) => typeof item === 'string' && item.trim())
+          .map((item: string) => item.trim().slice(0, 200))
+          .slice(0, 10);
+      }
+    });
+
+    // Sanitize keywords object
+    if (!data.keywords || typeof data.keywords !== 'object') {
+      data.keywords = { found: [], missing: [] };
+    }
+    if (!Array.isArray(data.keywords.found)) data.keywords.found = [];
+    if (!Array.isArray(data.keywords.missing)) data.keywords.missing = [];
+
+    // Sanitize keywords arrays
+    ['found', 'missing'].forEach(keywordType => {
+      data.keywords[keywordType] = data.keywords[keywordType]
+        .filter((keyword: any) => typeof keyword === 'string' && keyword.trim())
+        .map((keyword: string) => keyword.trim().toLowerCase().slice(0, 30))
+        .slice(0, 20);
+    });
+
+    // Sanitize summary string
+    if (typeof data.summary !== 'string') {
+      data.summary = 'No summary available';
+    } else {
+      data.summary = data.summary.trim().slice(0, 1000);
+      if (!data.summary) {
+        data.summary = 'No summary available';
+      }
+    }
+
+    // Add validation timestamp
+    data._validated = new Date().toISOString();
+  }
+
+  /**
+   * Sanitize string values with fallbacks
+   */
+  private sanitizeString(value: any, fallback: string, maxLength: number = 100): string {
+    if (typeof value !== 'string') {
+      return fallback;
+    }
+    
+    const sanitized = value.trim().slice(0, maxLength);
+    return sanitized || fallback;
+  }
+
+  /**
+   * Extract basic work experience from text lines
+   */
+  private extractWorkExperienceFromText(lines: string[]): any[] {
+    const experience: any[] = [];
+    const jobTitlePatterns = /\b(developer|engineer|manager|analyst|specialist|coordinator|director|lead|senior|junior)\b/i;
+    
+    lines.forEach(line => {
+      if (jobTitlePatterns.test(line) && line.length > 10) {
+        experience.push({
+          title: line.substring(0, 100),
+          company: 'Company Name',
+          duration: 'Date Range',
+          description: 'Professional role with relevant responsibilities'
+        });
+      }
+    });
+
+    return experience.slice(0, 5); // Limit to 5 entries
+  }
+
+  /**
+   * Extract skills from text using common patterns
+   */
+  private extractSkillsFromText(text: string): string[] {
+    const skillPatterns = [
+      /\b(javascript|python|java|react|angular|vue|node\.?js|typescript|html|css|sql|mongodb|postgresql|aws|azure|docker|kubernetes|git)\b/gi,
+      /\b(communication|leadership|teamwork|problem.solving|analytical|creative|organizational)\b/gi
+    ];
+    
+    const skills = new Set<string>();
+    
+    skillPatterns.forEach(pattern => {
+      const matches = text.match(pattern) || [];
+      matches.forEach(match => skills.add(match.toLowerCase()));
+    });
+
+    return Array.from(skills).slice(0, 15);
+  }
+
+  /**
+   * Extract education from text lines
+   */
+  private extractEducationFromText(lines: string[]): any[] {
+    const education: any[] = [];
+    const educationPatterns = /\b(university|college|bachelor|master|phd|degree|diploma|certification)\b/i;
+    
+    lines.forEach(line => {
+      if (educationPatterns.test(line) && line.length > 10) {
+        education.push({
+          institution: 'Educational Institution',
+          degree: line.substring(0, 100),
+          field: 'Field of Study',
+          year: 'Year'
+        });
+      }
+    });
+
+    return education.slice(0, 3);
+  }
+
+  /**
+   * Extract basic keywords from text
+   */
+  private extractBasicKeywords(text: string): string[] {
+    const commonKeywords = [
+      'management', 'development', 'analysis', 'design', 'implementation',
+      'collaboration', 'innovation', 'efficiency', 'quality', 'performance'
+    ];
+    
+    return commonKeywords.filter(keyword => text.includes(keyword.toLowerCase())).slice(0, 10);
+  }
+
+  // ...existing code...
 }
 
 export const resumeService = new ResumeProcessingService();

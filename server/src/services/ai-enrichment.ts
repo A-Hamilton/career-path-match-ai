@@ -28,8 +28,11 @@ export interface Job {
 }
 
 export class AIEnrichmentService {
-  private static readonly AI_CALL_DELAY_MS = 4500; // 4.5 seconds between calls
-  private static readonly MAX_AI_ENRICHMENTS_PER_REQUEST = 3;
+  private static readonly AI_CALL_DELAY_MS = 6000; // 6 seconds between calls for free tier
+  private static readonly MAX_AI_ENRICHMENTS_PER_REQUEST = 2; // Reduced from 3 to 2
+  private static lastAPICall = 0;
+  private static requestQueue: (() => Promise<void>)[] = [];
+  private static isProcessingQueue = false;
   
   public static needsEnrichment(job: Job): boolean {
     return (!job.min_annual_salary_usd && !job.max_annual_salary_usd) ||
@@ -118,12 +121,11 @@ export class AIEnrichmentService {
     }
     
     return jobs;
-  }
-    private static async estimateSalary(job: Job): Promise<{ min: number; max: number } | null> {
+  }    private static async estimateSalary(job: Job): Promise<{ min: number; max: number } | null> {
     try {
       const prompt = `Estimate the annual salary range in USD for a '${job.job_title}' role${job.location ? ` in ${job.location}` : ''}. Respond ONLY with a valid JSON object in this exact format: {"min": 50000, "max": 75000}. Do not include any other text, code fences, or explanations.`;
       
-      const model = aiService.getGenAIClient().getGenerativeModel({ model: 'gemini-pro' });
+      const model = aiService.getGenAIClient().getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
       const result = await model.generateContent(prompt);
       const response = await result.response;
       
@@ -139,12 +141,11 @@ export class AIEnrichmentService {
       logger.warn(`Salary estimation failed for job ${job.id}:`, error);
       return null;
     }
-  }
-    private static async enrichFields(job: Job): Promise<JobEnrichmentData | null> {
+  }    private static async enrichFields(job: Job): Promise<JobEnrichmentData | null> {
     try {
       const prompt = `Based on the job title "${job.job_title}" and description "${job.description || job.short_description || ''}", extract the country, industry, and 5 relevant tags. Respond ONLY with a valid JSON object in this exact format: {"country": "string", "industry": "string", "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"]}. Do not include any other text, code fences, or explanations.`;
       
-      const model = aiService.getGenAIClient().getGenerativeModel({ model: 'gemini-pro' });
+      const model = aiService.getGenAIClient().getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
       const result = await model.generateContent(prompt);
       const response = await result.response;
       
@@ -171,5 +172,58 @@ export class AIEnrichmentService {
     }
     
     return jsonText;
+  }
+  
+  /**
+   * Rate-limited API call wrapper
+   */
+  private static async makeRateLimitedAPICall<T>(apiCall: () => Promise<T>): Promise<T | null> {
+    return new Promise((resolve) => {
+      this.requestQueue.push(async () => {
+        try {
+          const now = Date.now();
+          const timeSinceLastCall = now - this.lastAPICall;
+          
+          if (timeSinceLastCall < this.AI_CALL_DELAY_MS) {
+            const waitTime = this.AI_CALL_DELAY_MS - timeSinceLastCall;
+            console.log(`Rate limiting: waiting ${waitTime}ms before API call`);
+            await delay(waitTime);
+          }
+          
+          this.lastAPICall = Date.now();
+          const result = await apiCall();
+          resolve(result);
+        } catch (error: any) {
+          if (error.status === 429) {
+            console.warn('API rate limit hit, returning null');
+            resolve(null);
+          } else {
+            throw error;
+          }
+        }
+      });
+      
+      this.processQueue();
+    });
+  }
+
+  /**
+   * Process the request queue sequentially
+   */
+  private static async processQueue(): Promise<void> {
+    if (this.isProcessingQueue || this.requestQueue.length === 0) {
+      return;
+    }
+    
+    this.isProcessingQueue = true;
+    
+    while (this.requestQueue.length > 0) {
+      const request = this.requestQueue.shift();
+      if (request) {
+        await request();
+      }
+    }
+    
+    this.isProcessingQueue = false;
   }
 }

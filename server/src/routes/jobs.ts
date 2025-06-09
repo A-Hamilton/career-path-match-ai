@@ -9,24 +9,8 @@ const router = Router();
 // GET /api/jobs - Search for jobs
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const {
-      search = '',
-      location = '',
-      sortBy = 'relevance',
-      limit = '10',
-      offset = '0',
-      country = ''
-    } = req.query;
-
-    const searchParams = {
-      search: search as string,
-      location: location as string,
-      sortBy: sortBy as string,
-      limit: parseInt(limit as string, 10),
-      offset: parseInt(offset as string, 10),      country: country as string
-    };
-
-    const result = await jobSearchService.searchJobs(searchParams);
+    // Use the getJobs method which handles frontend query parameters properly
+    const result = await jobSearchService.getJobs(req.query);
     res.json(result);
   } catch (error) {
     logger.error('Error in GET /api/jobs:', error);
