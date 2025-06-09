@@ -28,9 +28,8 @@ export class JobProcessorService {
         console.log(`No jobs found from TheirStack for search ${searchKey || 'unknown'}`);
         return false;
       }
-      
-      // Process multiple jobs (2-4 jobs per search) for more realistic results
-      const jobsToProcess = theirStackJobs.slice(0, Math.floor(Math.random() * 3) + 2);
+        // Process all jobs since we're only getting 3 to maximize API credit value
+      const jobsToProcess = theirStackJobs; // Process all 3 jobs
       
       let successCount = 0;
       
@@ -84,33 +83,32 @@ export class JobProcessorService {
         return [];
       }      // Build TheirStack API filters based on API specification
       const filters: any = {
-        posted_at_max_age_days: 30, // Jobs posted within last 30 days
+        posted_at_max_age_days: 30, // Required field - jobs posted within last 30 days
         page: 0,
-        limit: 20, // Get more jobs to choose from
-        include_total_results: false // For faster responses
+        limit: 3 // Only get 3 jobs to conserve API credits (1 credit per job)
       };
 
       // Add search criteria using correct parameter names from API docs
       if (queryParams.what) {
-        // Use job_title_pattern_or for keyword search (case-insensitive patterns)
+        // Use job_title_pattern_or for regex pattern matching (case-insensitive)
         const searchTerm = queryParams.what.trim();
         if (searchTerm) {
           filters.job_title_pattern_or = [searchTerm]; // Must be an array
-        }      }
+        }
+      }
 
+      // NOTE: location_name_or is not supported by TheirStack API
+      // Location filtering will be done post-processing
       if (queryParams.where) {
-        // Use location_name_or for location search
-        const locationTerm = queryParams.where.trim();
-        if (locationTerm) {
-          filters.location_name_or = [locationTerm]; // Must be an array
-        }      }
+        console.log(`Location filtering for "${queryParams.where}" will be applied post-processing`);
+      }
 
-      // Add salary filters if provided (only include supported fields)
+      // Add salary filters if provided (using correct parameter names)
       if (queryParams.salary_min) {
-        filters.min_annual_salary_usd_gte = parseInt(queryParams.salary_min);
+        filters.min_salary_usd = parseInt(queryParams.salary_min);
       }
       if (queryParams.salary_max) {
-        filters.max_annual_salary_usd_lte = parseInt(queryParams.salary_max);
+        filters.max_salary_usd = parseInt(queryParams.salary_max);
       }console.log(`Fetching jobs from TheirStack API with filters:`, filters);
 
       const response = await axios.post(
@@ -124,15 +122,14 @@ export class JobProcessorService {
           timeout: 15000, // Increased timeout
           validateStatus: (status) => status < 500 // Accept 4xx errors to handle them gracefully
         }
-      );
-
-      if (response.status === 402) {
-        console.warn('TheirStack API: Payment required or quota exceeded');
+      );      if (response.status === 402) {
+        console.warn('TheirStack API: Payment required or quota exceeded - consider upgrading plan or implementing fallback');
+        // TODO: Could implement fallback to alternative job source here
         return [];
       }
 
       if (response.status === 429) {
-        console.warn('TheirStack API: Rate limit reached');
+        console.warn('TheirStack API: Rate limit reached - will retry later');
         return [];
       }
 
@@ -144,12 +141,65 @@ export class JobProcessorService {
       if (response.status !== 200) {
         console.error(`TheirStack API returned status ${response.status}:`, response.data);
         return [];
+      }      const result = response.data;
+      let jobsList = Array.isArray(result.data) ? result.data : [];
+
+      console.log(`Retrieved ${jobsList.length} jobs from TheirStack API`);      // Apply location filtering post-processing since TheirStack doesn't support location_name_or
+      if (queryParams.where) {
+        const locationFilter = queryParams.where.toLowerCase().trim();
+        const originalCount = jobsList.length;
+        
+        // More flexible location matching
+        jobsList = jobsList.filter((job: any) => {
+          // Handle special cases first
+          if (locationFilter === 'remote' && job.remote) {
+            return true;
+          }
+          
+          // Get all possible location fields
+          const jobLocation = (job.location?.name || job.location_name || job.location || '').toLowerCase();
+          const jobLongLocation = (job.location?.full_name || job.long_location || '').toLowerCase();
+          const jobCountry = (job.location?.country || job.country || '').toLowerCase();
+          const jobCity = (job.location?.city || job.city || '').toLowerCase();
+          const jobState = (job.location?.state || job.state || '').toLowerCase();
+          
+          // Split location filter into parts for flexible matching
+          const filterParts: string[] = locationFilter.split(/[\s,]+/).filter((part: string) => part.length > 0);
+          
+          // Check if any filter part matches any location field
+          return filterParts.some(filterPart => 
+            jobLocation.includes(filterPart) || 
+            jobLongLocation.includes(filterPart) ||
+            jobCountry.includes(filterPart) ||
+            jobCity.includes(filterPart) ||
+            jobState.includes(filterPart) ||
+            // Also check for common location abbreviations
+            (filterPart === 'ny' && (jobLocation.includes('new york') || jobState.includes('new york'))) ||
+            (filterPart === 'nyc' && jobLocation.includes('new york')) ||
+            (filterPart === 'sf' && (jobLocation.includes('san francisco') || jobCity.includes('san francisco'))) ||
+            (filterPart === 'belfast' && (jobLocation.includes('belfast') || jobCity.includes('belfast')))
+          );
+        });
+          console.log(`Location filter "${queryParams.where}" reduced results from ${originalCount} to ${jobsList.length} jobs`);
+        
+        // Debug: Log some job locations if filtering removed everything
+        if (jobsList.length === 0 && originalCount > 0) {
+          console.log('DEBUG: Sample job locations from original results:');
+          const originalJobs = Array.isArray(result.data) ? result.data : [];
+          const sampleJobs = originalJobs.slice(0, 3);
+          sampleJobs.forEach((job: any, index: number) => {
+            console.log(`  Job ${index + 1}: ${JSON.stringify({
+              location: job.location,
+              location_name: job.location_name,
+              long_location: job.long_location,
+              country: job.country,
+              city: job.city,
+              state: job.state
+            })}`);
+          });
+          console.log(`  Filter was looking for: "${locationFilter}"`);
+        }
       }
-
-      const result = response.data;
-      const jobsList = Array.isArray(result.data) ? result.data : [];
-
-      console.log(`Retrieved ${jobsList.length} jobs from TheirStack API`);
 
       // Transform TheirStack jobs to our internal format
       return jobsList.map((job: any) => this.transformTheirStackJob(job));
